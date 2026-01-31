@@ -34,17 +34,21 @@ def init_lens(
     :param allure_strategy: managed, external, or none.
     """
     config_path = os.path.join(target_dir, "aether-lens.config.json")
-    
+
     default_config = {
         "strategy": strategy,
         "custom_instruction": "",
         "browser_strategy": browser_strategy,
         "allure_strategy": allure_strategy,
-        "dev_loop": {"browser_targets": ["desktop", "tablet", "mobile"], "debounce_seconds": 2},
+        "dev_loop": {
+            "browser_targets": ["desktop", "tablet", "mobile"],
+            "debounce_seconds": 2,
+        },
     }
 
     with open(config_path, "w") as f:
         import json
+
         json.dump(default_config, f, indent=2)
 
     return f"Successfully generated: {config_path}"
@@ -58,13 +62,13 @@ def get_vibe_insight(target_dir: str = ".", strategy: str = "auto"):
     :param target_dir: The directory to analyze.
     :param strategy: Analysis strategy to use.
     """
-    from aether_lens.core.pipeline import get_git_diff
     from aether_lens.core.ai import run_analysis
-    
+    from aether_lens.core.pipeline import get_git_diff
+
     diff = get_git_diff(target_dir)
     if not diff:
         return "No changes detected."
-    
+
     analysis = run_analysis(diff, context="mcp-agent", strategy=strategy)
     return analysis
 
@@ -151,6 +155,27 @@ def stop_lens_loop(target_dir: str):
         return f"Lens Loop stopped for {target_dir}."
     else:
         return f"No active Lens Loop found for {target_dir}."
+
+
+@mcp.tool()
+def check_prerequisites(target_dir: str = "."):
+    """
+    Validate environment prerequisites and configuration integrity.
+    Checks config schema, tool availability (Docker, Node, etc.), and reports status.
+
+    :param target_dir: The directory to check.
+    """
+    from aether_lens.client.cli.commands.check import check_prerequisites as check_logic
+
+    # We suppress verbose console output for MCP return value,
+    # but the function currently prints to stderr.
+    # We'll rely on the returned dict.
+    results = check_logic(target_dir, verbose=False)
+
+    if results["valid"]:
+        return f"Checks Passed: {results}"
+    else:
+        return f"Checks Failed: {results}"
 
 
 def main():

@@ -22,6 +22,7 @@ dependencies = [
     "python-socketio[client]>=5.16.0",
     "socksio>=1.0.0",
     "Pillow",
+    "pil",
 ]
 
 [project.optional-dependencies]

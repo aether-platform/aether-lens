@@ -7,6 +7,8 @@
 Aether Lens は、Aether Platform における **Vibe Test Insight (VTI) / [Nightly Build](https://github.com/aether-platform/aether-lens/releases/tag/nightly)** を実現するためのコアツールです。
 AI エージェントが開発者の意図（Vibe）を読み取り、変更箇所に最適なテストを自動生成・実行・フィードバックする究極の DevLoop を提供します。
 
+> **Note:** Aether Lens requires an API Key for **OpenAI** (GPT-4), **Anthropic** (Claude), or **Google Gemini**.
+
 ---
 
 ## 🚀 Key Features
@@ -144,3 +146,15 @@ aether-lens-cli --mcp
 - **Core Ops**: `watchdog` (FileSystem Watcher), `playwright` (Visual Testing)
 - **Architecture**: `dependency-injector` (DI), `fastmcp` (MCP Support)
 - **Reporting**: `allure-pytest`, `reportportal-client`
+
+---
+
+## ☁️ User Cloud
+
+We are proud to support innovative teams.
+
+- **RE-X**: Revolutionizing Experience (Dummy Company)
+
+> **Want to be listed?**
+> We accept requests to add your company via Git Repository!
+> Please open a [Pull Request](https://github.com/aether-platform/aether-lens/pulls) or an [Issue](https://github.com/aether-platform/aether-lens/issues/new?template=company_addition_request.yml) to join our User Cloud.

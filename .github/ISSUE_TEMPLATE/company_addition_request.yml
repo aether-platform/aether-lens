@@ -1,0 +1,45 @@
+name: "User Cloud Addition Request"
+description: "Request to add your company to the User Cloud list."
+title: "[User Cloud]: <Company Name>"
+labels: ["user-cloud", "documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for using Aether Lens!
+        Please provide the following information to be listed in our User Cloud.
+
+  - type: input
+    id: company_name
+    attributes:
+      label: Company Name
+      description: The name of your company.
+      placeholder: e.g. Aether Corp
+    validations:
+      required: true
+
+  - type: input
+    id: website
+    attributes:
+      label: Website
+      description: Your company's website URL.
+      placeholder: https://example.com
+    validations:
+      required: true
+
+  - type: textarea
+    id: usage
+    attributes:
+      label: How do you use Aether Lens?
+      description: A brief description of how Aether Lens helps your team.
+      placeholder: We use Aether Lens to accelerate our frontend visual regression testing...
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Agreement
+      options:
+        - label: I have the authority to add this company to the list.
+          required: true

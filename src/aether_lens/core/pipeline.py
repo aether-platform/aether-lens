@@ -53,11 +53,34 @@ def run_deployment_hook(command, cwd=None):
             console.print("    - [green]Deployment OK[/green]")
             return True, result.stdout
         else:
-            console.print(f"    - [red]Deployment Failed ({result.returncode})[/red]")
             console.print(f"      {result.stderr.strip()}")
             return False, result.stderr
     except Exception as e:
         console.print(f"    - [red]Deployment Error:[/red] {e}")
+        return False, str(e)
+
+
+def start_background_process(command, cwd=None):
+    """Starts a process in the background and returns the Popen object."""
+    if not command:
+        return None
+    console.print(f" -> [Pipeline] Starting background process: [cyan]{command}[/cyan]")
+    try:
+        # Popen to start without waiting
+        # unix shell=True for complex commands
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            shell=True,
+            stdout=subprocess.DEVNULL,  # Optionally redirect logging
+            stderr=subprocess.DEVNULL,
+            preexec_fn=os.setsid,  # Create new session group for cleaner kill
+        )
+        console.print(f"    - [green]Process Started (PID: {process.pid})[/green]")
+        return process
+    except Exception as e:
+        console.print(f"    - [red]Start Error:[/red] {e}")
+        return None
         return False, str(e)
 
 
@@ -539,25 +562,27 @@ async def run_pipeline(
     # Resolve App Lifecycle
     config = load_config(target_dir)
     deployment_config = config.get("deployment", {})
-    
+
     # Determine the context key (e.g. 'docker', 'kubernetes') from the provider
     # We can infer this from the provider class name or a property
     # For now, let's assume we can map the strategy string passed in configurations
-    # The 'browser_strategy' is explicitly passed to specific functions, but here 
+    # The 'browser_strategy' is explicitly passed to specific functions, but here
     # run_pipeline receives 'browser_provider' instance.
     # However, init/cli sets 'browser_strategy' in config.
-    
+
     current_env = config.get("browser_strategy", "local")
     env_deploy = deployment_config.get(current_env)
 
     deploy_cmd = None
     cleanup_cmd = None
-    health_url = config.get("health_check_url") or app_url  # Fallback to global if not in env
+    health_url = (
+        config.get("health_check_url") or app_url
+    )  # Fallback to global if not in env
 
     if env_deploy:
         deploy_type = env_deploy.get("type")
         health_url = env_deploy.get("health_check") or health_url
-        
+
         if deploy_type == "compose":
             compose_file = env_deploy.get("file", "docker-compose.yaml")
             service = env_deploy.get("service", "")
@@ -572,7 +597,9 @@ async def run_pipeline(
             cleanup_cmd = f"kubectl delete {manifests} -n {namespace}"
         elif deploy_type == "kustomize":
             path = env_deploy.get("path", ".")
-            namespace = env_deploy.get("namespace", "") # Kustomize usually handles NS, but explicit NS might be needed override? 
+            namespace = env_deploy.get(
+                "namespace", ""
+            )  # Kustomize usually handles NS, but explicit NS might be needed override?
             # Usually 'kubectl apply -k dir' is enough.
             deploy_cmd = f"kubectl apply -k {path}"
             cleanup_cmd = f"kubectl delete -k {path}"

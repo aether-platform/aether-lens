@@ -249,16 +249,34 @@ def watch(
         deploy_cmd = os.getenv("DEPLOY_COMMAND") or deploy_cmd
         cleanup_cmd = os.getenv("CLEANUP_COMMAND") or cleanup_cmd
 
+        is_background = (
+            env_deploy and env_deploy.get("background", False)
+            if deployment_config
+            else False
+        )
+
         if deploy_cmd:
             from aether_lens.core.pipeline import (
                 run_deployment_hook,
+                start_background_process,
                 wait_for_health_check,
             )
 
-            success, _ = run_deployment_hook(deploy_cmd, cwd=target_dir)
-            if not success:
-                console.print("[red]Deployment failed. Exiting watch.[/red]")
-                return
+            if is_background:
+                proc = start_background_process(deploy_cmd, cwd=target_dir)
+                if not proc:
+                    console.print(
+                        "[red]Failed to start background process. Exiting watch.[/red]"
+                    )
+                    return
+                # Store for cleanup
+                cleanup_command_ref[0] = {"cmd": cleanup_cmd, "proc": proc}
+            else:
+                success, _ = run_deployment_hook(deploy_cmd, cwd=target_dir)
+                if not success:
+                    console.print("[red]Deployment failed. Exiting watch.[/red]")
+                    return
+                cleanup_command_ref[0] = {"cmd": cleanup_cmd, "proc": None}
 
             if health_check_url:
                 os.environ["HEALTH_CHECK_URL"] = health_check_url
