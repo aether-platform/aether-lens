@@ -39,3 +39,7 @@ aether-lens.config.json
 __pycache__/
 *.egg-info/
 .aether/
+src/aether_lens.egg-info/entry_points.txt
+src/aether_lens.egg-info/PKG-INFO
+src/aether_lens.egg-info/requires.txt
+src/aether_lens.egg-info/SOURCES.txt

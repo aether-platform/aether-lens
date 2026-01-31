@@ -560,9 +560,9 @@ async def run_pipeline(
         )
 
     # Decide execution mode
-    # If headless is forced, or not TTY, skip TUI
-    is_headless = getattr(browser_provider, "headless", False)
-    can_use_tui = use_tui and sys.stdin.isatty() and not is_headless
+    # --headless now ONLY refers to the browser being headless.
+    # TUI is used by default if it's an interactive terminal.
+    can_use_tui = use_tui and sys.stdin.isatty()
 
     # Try importing Textual if TUI is requested
     if can_use_tui:

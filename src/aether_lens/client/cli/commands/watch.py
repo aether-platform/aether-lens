@@ -4,7 +4,7 @@ import os
 import click
 from rich.console import Console
 
-from aether_lens.core.pipeline import load_config, run_pipeline
+from aether_lens.core.pipeline import get_git_diff, load_config, run_pipeline
 from aether_lens.core.watcher import start_watcher
 
 console = Console(stderr=True)
@@ -124,15 +124,25 @@ def watch(
     # Get persistent browser provider
     browser_provider = container.browser_provider()
 
-    async def async_watch():
-        loop = asyncio.get_running_loop()
+    # Run the pipeline logic
+    # watch always uses TUI by default now.
+    # We want to keep the TUI active and just trigger new runs.
+    from aether_lens.core.tui import PipelineDashboard
 
-        def on_change(file_path):
-            console.print(
-                f"\n[Lens Watch] Change detected: {file_path}", style="bold yellow"
-            )
-            asyncio.run_coroutine_threadsafe(
-                run_pipeline(
+    # Resolve strategies to run (dry run to get tests)
+    get_git_diff(target_dir)
+    # We'll need a better way to get recommended tests without running full pipeline
+    # but for now, let's just initialize the dashboard with empty and it will populate.
+    app = PipelineDashboard([], strategy_name=selected_strategy)
+
+    async def run_logic():
+        # Wait for app to be ready
+        while not app.is_mounted:
+            await asyncio.sleep(0.1)
+
+        async def trigger_pipeline(is_initial=False):
+            try:
+                await run_pipeline(
                     target_dir,
                     browser_url,
                     context,
@@ -141,44 +151,36 @@ def watch(
                     strategy=selected_strategy,
                     custom_instruction=custom_instruction,
                     browser_provider=browser_provider,
-                    use_tui=False,
+                    use_tui=True,  # This will find the active app
                     close_browser=False,
                     app_url=app_url,
-                ),
-                loop,
+                )
+            except Exception as e:
+                app.log_message(f"[red]Pipeline error:[/red] {e}")
+
+        def on_change(file_path):
+            app.log_message(f"Change detected: {file_path}")
+            asyncio.run_coroutine_threadsafe(
+                trigger_pipeline(), asyncio.get_running_loop()
             )
+
+        # Start watcher
+        observer = start_watcher(target_dir, on_change, blocking=False)
 
         # Initial run
-        try:
-            await run_pipeline(
-                target_dir,
-                browser_url,
-                context,
-                rp_url=rp_url,
-                allure_dir=allure_dir,
-                strategy=selected_strategy,
-                custom_instruction=custom_instruction,
-                browser_provider=browser_provider,
-                use_tui=False,
-                close_browser=False,
-                app_url=app_url,
-            )
-        except Exception as e:
-            console.print(f"[red]Initial run error:[/red] {e}")
+        await trigger_pipeline(is_initial=True)
 
-        # Start watcher (non-blocking)
-        observer = start_watcher(target_dir, on_change, blocking=False)
         try:
             while True:
                 await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            observer.stop()
         finally:
             observer.stop()
             observer.join()
             await browser_provider.close()
 
     try:
-        asyncio.run(async_watch())
+        # Run TUI and logic
+        asyncio.create_task(run_logic())
+        asyncio.run(app.run_async())
     except KeyboardInterrupt:
         console.print("\n[Lens Watch] Stopped.", style="dim")
