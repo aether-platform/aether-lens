@@ -1,8 +1,10 @@
 # Aether Lens (Vibe Test Insight)
 
+[![Nightly Release](https://img.shields.io/badge/Release-Nightly-blue)](https://github.com/aether-platform/aether-lens/releases/tag/nightly)
+
 > **"Code changes shouldn't just run tests; they should reveal insights."**
 
-Aether Lens は、Aether Platform における **Vibe Test Insight (VTI)** を実現するためのコアツールです。
+Aether Lens は、Aether Platform における **Vibe Test Insight (VTI) / [Nightly Build](https://github.com/aether-platform/aether-lens/releases/tag/nightly)** を実現するためのコアツールです。
 AI エージェントが開発者の意図（Vibe）を読み取り、変更箇所に最適なテストを自動生成・実行・フィードバックする究極の DevLoop を提供します。
 
 ---
@@ -89,7 +91,7 @@ uv pip install -e . --system
 対話形式でプロジェクトの設定ファイルを生成します。
 
 ```bash
-aether-lens init
+aether-lens-cli init
 ```
 
 ### 2. 手動解析 (Run)
@@ -97,7 +99,7 @@ aether-lens init
 現在のコード状態に対して、1 回限りの解析を実行します。
 
 ```bash
-aether-lens . --strategy frontend
+aether-lens-cli . --strategy frontend
 ```
 
 ### 3. 開発ループ (Watch Mode)
@@ -105,7 +107,7 @@ aether-lens . --strategy frontend
 変更を監視し、自動的に VTI を回します。
 
 ```bash
-aether-lens . --watch
+aether-lens-cli . --watch
 ```
 
 ### 4. MCP サーバー起動
@@ -113,7 +115,7 @@ aether-lens . --watch
 外部 AI エージェントとの連携用サーバーを起動します。
 
 ```bash
-aether-lens --mcp
+aether-lens-cli --mcp
 ```
 
 ---

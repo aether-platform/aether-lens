@@ -61,12 +61,79 @@ def init(target_dir):
             "Enter external Allure API endpoint", default="http://localhost:5050"
         )
 
+    if allure_choice != "none":
+        allure_project_id = Prompt.ask(
+            "Enter Allure Project ID (for team isolation)", default="default"
+        )
+
+    console.print("\n[bold cyan]Application Lifecycle (Environment-Driven)[/bold cyan]")
+    deployment_config = {}
+
+    # Smart defaults based on strategy
+    if browser_strategy in ["docker", "local"]:
+        if Confirm.ask(
+            "Use Docker Compose for deployment?", default=(browser_strategy == "docker")
+        ):
+            compose_file = Prompt.ask(
+                "Compose file path", default="docker-compose.yaml"
+            )
+            # Addressing user feedback: Suggest 'app' or 'web' as standard, or empty for full stack
+            service = Prompt.ask(
+                "Target Service Name (default: app, empty for full stack)",
+                default="app",
+            )
+            health_check = Prompt.ask(
+                "Health Check URL", default="http://localhost:8080/health"
+            )
+
+            deployment_config["docker"] = {
+                "type": "compose",
+                "file": compose_file,
+                "service": service,
+                "health_check": health_check,
+            }
+            # Also map local to this if running locally but using compose?
+            # pipeline.py logic maps 'browser_strategy' (key) to deployment config.
+            # If browser_strategy is 'local', we might want to use 'docker' config?
+            # Let's map both keys if appropriate.
+            deployment_config["local"] = deployment_config["docker"]
+
+    elif browser_strategy in ["kubernetes", "inpod"]:
+        if Confirm.ask("Use Kustomize for deployment?", default=True):
+            kustomize_path = Prompt.ask(
+                "Kustomize overlay path (dir)", default="k8s/overlays/test"
+            )
+            namespace = Prompt.ask("Target Namespace (optional override)", default="")
+            health_check = Prompt.ask(
+                "Health Check URL", default="http://service:8080/health"
+            )
+
+            deploy_conf = {
+                "type": "kustomize",
+                "path": kustomize_path,
+                "health_check": health_check,
+            }
+            if namespace:
+                deploy_conf["namespace"] = namespace
+
+            deployment_config["kubernetes"] = deploy_conf
+            deployment_config["inpod"] = deploy_conf
+
     default_config = {
         "strategy": analysis_strategy,
         "custom_instruction": custom_instruction,
         "browser_strategy": browser_strategy,
         "allure_strategy": allure_strategy,
         "allure_endpoint": allure_endpoint,
+        "allure_project_id": locals().get("allure_project_id", "default"),
+        "deployment": deployment_config,
+        "tests": [
+            {
+                "type": "command",
+                "label": "Lint Check",
+                "command": "npm run lint || echo 'Lint skipped'",
+            }
+        ],
         "dev_loop": {"browser_targets": ["desktop", "mobile"], "debounce_seconds": 2},
     }
 

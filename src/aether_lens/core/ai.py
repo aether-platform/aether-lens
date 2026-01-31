@@ -80,6 +80,13 @@ def run_analysis(
             },
             {
                 "type": "visual",
+                "label": "Tablet Home (Medium)",
+                "browser": "chromium",
+                "viewport": "768x1024",
+                "path": "/",
+            },
+            {
+                "type": "visual",
                 "label": "Mobile Home (Responsive)",
                 "browser": "chromium",
                 "viewport": "375x667",

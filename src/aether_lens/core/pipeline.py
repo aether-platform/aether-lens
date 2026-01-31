@@ -36,6 +36,55 @@ def load_config(target_dir):
     return {}
 
 
+def run_deployment_hook(command, cwd=None):
+    if not command:
+        return True, "No command provided"
+    console.print(f" -> [Pipeline] Running deployment hook: [cyan]{command}[/cyan]")
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            check=False,  # Allow manual error handling
+        )
+        if result.returncode == 0:
+            console.print("    - [green]Deployment OK[/green]")
+            return True, result.stdout
+        else:
+            console.print(f"    - [red]Deployment Failed ({result.returncode})[/red]")
+            console.print(f"      {result.stderr.strip()}")
+            return False, result.stderr
+    except Exception as e:
+        console.print(f"    - [red]Deployment Error:[/red] {e}")
+        return False, str(e)
+
+
+async def wait_for_health_check(url, timeout=30):
+    if not url:
+        return True
+
+    import httpx
+
+    console.print(f" -> [Pipeline] Waiting for health check: [cyan]{url}[/cyan] ...")
+    start_time = time.time()
+
+    async with httpx.AsyncClient() as client:
+        while time.time() - start_time < timeout:
+            try:
+                response = await client.get(url, timeout=2.0)
+                if response.status_code < 400:
+                    console.print("    - [green]Health Check OK[/green]")
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(1)
+
+    console.print(f"    - [red]Health Check Timed Out after {timeout}s[/red]")
+    return False
+
+
 def get_git_diff(target_dir):
     try:
         result = subprocess.run(
@@ -486,6 +535,68 @@ async def run_pipeline(
             expand=False,
         )
     )
+
+    # Resolve App Lifecycle
+    config = load_config(target_dir)
+    deployment_config = config.get("deployment", {})
+    
+    # Determine the context key (e.g. 'docker', 'kubernetes') from the provider
+    # We can infer this from the provider class name or a property
+    # For now, let's assume we can map the strategy string passed in configurations
+    # The 'browser_strategy' is explicitly passed to specific functions, but here 
+    # run_pipeline receives 'browser_provider' instance.
+    # However, init/cli sets 'browser_strategy' in config.
+    
+    current_env = config.get("browser_strategy", "local")
+    env_deploy = deployment_config.get(current_env)
+
+    deploy_cmd = None
+    cleanup_cmd = None
+    health_url = config.get("health_check_url") or app_url  # Fallback to global if not in env
+
+    if env_deploy:
+        deploy_type = env_deploy.get("type")
+        health_url = env_deploy.get("health_check") or health_url
+        
+        if deploy_type == "compose":
+            compose_file = env_deploy.get("file", "docker-compose.yaml")
+            service = env_deploy.get("service", "")
+            deploy_cmd = f"docker compose -f {compose_file} up -d {service}"
+            cleanup_cmd = f"docker compose -f {compose_file} down"
+        elif deploy_type == "kubectl":
+            manifests = env_deploy.get("manifests", [])
+            if isinstance(manifests, list):
+                manifests = " ".join([f"-f {m}" for m in manifests])
+            namespace = env_deploy.get("namespace", "default")
+            deploy_cmd = f"kubectl apply {manifests} -n {namespace}"
+            cleanup_cmd = f"kubectl delete {manifests} -n {namespace}"
+        elif deploy_type == "kustomize":
+            path = env_deploy.get("path", ".")
+            namespace = env_deploy.get("namespace", "") # Kustomize usually handles NS, but explicit NS might be needed override? 
+            # Usually 'kubectl apply -k dir' is enough.
+            deploy_cmd = f"kubectl apply -k {path}"
+            cleanup_cmd = f"kubectl delete -k {path}"
+            if namespace:
+                deploy_cmd += f" -n {namespace}"
+                cleanup_cmd += f" -n {namespace}"
+        elif deploy_type == "custom":
+            deploy_cmd = env_deploy.get("deploy_command")
+            cleanup_cmd = env_deploy.get("cleanup_command")
+
+    # Override with legacy/CLI env vars if present (backward compatibility)
+    deploy_cmd = os.getenv("DEPLOY_COMMAND") or deploy_cmd
+    cleanup_cmd = os.getenv("CLEANUP_COMMAND") or cleanup_cmd
+    health_url = os.getenv("HEALTH_CHECK_URL") or health_url
+
+    if deploy_cmd:
+        success, output = run_deployment_hook(deploy_cmd, cwd=target_dir)
+        if not success:
+            console.print("[red]Aborting pipeline due to deployment failure.[/red]")
+            return
+
+    if health_url and deploy_cmd:
+        if not await wait_for_health_check(health_url):
+            console.print("[yellow]Warning: Application might not be ready.[/yellow]")
 
     diff = get_git_diff(target_dir)  # Simplified
     if not diff:

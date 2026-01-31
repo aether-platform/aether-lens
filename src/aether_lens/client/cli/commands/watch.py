@@ -72,6 +72,8 @@ def watch(
     """Watch for changes and run pipeline (In-Pod mode)."""
     from aether_lens.client.cli.main import container
 
+    cleanup_command_ref = [None]
+
     # 1. Load config first
     target_dir = os.path.abspath(target or os.getenv("TARGET_DIR") or ".")
     config = load_config(target_dir)
@@ -206,6 +208,70 @@ def watch(
         if allure_api_key:
             os.environ["ALLURE_API_KEY"] = allure_api_key
 
+        # --- Deployment Hook (Start of Watch) ---
+        deployment_config = config.get("deployment", {})
+        current_env = browser_strategy.replace("-", "_")
+        env_deploy = deployment_config.get(current_env)
+
+        deploy_cmd = None
+        cleanup_cmd = None
+        health_check_url = config.get("health_check_url")
+
+        if env_deploy:
+            deploy_type = env_deploy.get("type")
+            health_check_url = env_deploy.get("health_check") or health_check_url
+
+            if deploy_type == "compose":
+                compose_file = env_deploy.get("file", "docker-compose.yaml")
+                service = env_deploy.get("service", "")
+                deploy_cmd = f"docker compose -f {compose_file} up -d {service}"
+                cleanup_cmd = f"docker compose -f {compose_file} down"
+            elif deploy_type == "kubectl":
+                manifests = env_deploy.get("manifests", [])
+                if isinstance(manifests, list):
+                    manifests = " ".join([f"-f {m}" for m in manifests])
+                namespace = env_deploy.get("namespace", "default")
+                deploy_cmd = f"kubectl apply {manifests} -n {namespace}"
+                cleanup_cmd = f"kubectl delete {manifests} -n {namespace}"
+            elif deploy_type == "kustomize":
+                path = env_deploy.get("path", ".")
+                namespace = env_deploy.get("namespace", "")
+                deploy_cmd = f"kubectl apply -k {path}"
+                cleanup_cmd = f"kubectl delete -k {path}"
+                if namespace:
+                    deploy_cmd += f" -n {namespace}"
+                    cleanup_cmd += f" -n {namespace}"
+            elif deploy_type == "custom":
+                deploy_cmd = env_deploy.get("deploy_command")
+                cleanup_cmd = env_deploy.get("cleanup_command")
+
+        # CLI overrides (legacy/env support)
+        deploy_cmd = os.getenv("DEPLOY_COMMAND") or deploy_cmd
+        cleanup_cmd = os.getenv("CLEANUP_COMMAND") or cleanup_cmd
+
+        if deploy_cmd:
+            from aether_lens.core.pipeline import (
+                run_deployment_hook,
+                wait_for_health_check,
+            )
+
+            success, _ = run_deployment_hook(deploy_cmd, cwd=target_dir)
+            if not success:
+                console.print("[red]Deployment failed. Exiting watch.[/red]")
+                return
+
+            if health_check_url:
+                os.environ["HEALTH_CHECK_URL"] = health_check_url
+                if not await wait_for_health_check(health_check_url):
+                    console.print(
+                        "[red]Health check failed (timeout). Exiting watch.[/red]"
+                    )
+                    return
+
+        # Store for cleanup
+        cleanup_command_ref[0] = cleanup_cmd
+        # ----------------------------------------
+
         # Wait for app to be ready
         while not app.is_mounted:
             await asyncio.sleep(0.1)
@@ -249,6 +315,12 @@ def watch(
             await browser_provider.close()
             if allure_provider:
                 await allure_provider.stop()
+
+            if cleanup_command_ref[0]:
+                from aether_lens.core.pipeline import run_deployment_hook
+
+                console.print("\n[bold cyan]Running Cleanup Command...[/bold cyan]")
+                run_deployment_hook(cleanup_command_ref[0], cwd=target_dir)
 
     async def main_loop():
         # Start TUI and logic concurrently

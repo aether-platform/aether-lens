@@ -19,8 +19,59 @@ mcp = FastMCP("Aether Lens")
 
 
 @mcp.tool()
+def init_lens(
+    target_dir: str = ".",
+    strategy: str = "auto",
+    browser_strategy: str = "local",
+    allure_strategy: str = "managed",
+):
+    """
+    Initialize Aether Lens configuration for a project (Non-interactive).
+
+    :param target_dir: The directory to initialize.
+    :param strategy: Default analysis strategy (auto, frontend, backend, microservice, custom).
+    :param browser_strategy: local, docker, kubernetes, or inpod.
+    :param allure_strategy: managed, external, or none.
+    """
+    config_path = os.path.join(target_dir, "aether-lens.config.json")
+    
+    default_config = {
+        "strategy": strategy,
+        "custom_instruction": "",
+        "browser_strategy": browser_strategy,
+        "allure_strategy": allure_strategy,
+        "dev_loop": {"browser_targets": ["desktop", "tablet", "mobile"], "debounce_seconds": 2},
+    }
+
+    with open(config_path, "w") as f:
+        import json
+        json.dump(default_config, f, indent=2)
+
+    return f"Successfully generated: {config_path}"
+
+
+@mcp.tool()
+def get_vibe_insight(target_dir: str = ".", strategy: str = "auto"):
+    """
+    Get AI-powered vibe insight (analysis only) for the current changes.
+
+    :param target_dir: The directory to analyze.
+    :param strategy: Analysis strategy to use.
+    """
+    from aether_lens.core.pipeline import get_git_diff
+    from aether_lens.core.ai import run_analysis
+    
+    diff = get_git_diff(target_dir)
+    if not diff:
+        return "No changes detected."
+    
+    analysis = run_analysis(diff, context="mcp-agent", strategy=strategy)
+    return analysis
+
+
+@mcp.tool()
 def run_lens_test(
-    target_dir: str,
+    target_dir: str = ".",
     strategy: str = "auto",
     browser_strategy: str = "local",
     browser_url: str = None,
