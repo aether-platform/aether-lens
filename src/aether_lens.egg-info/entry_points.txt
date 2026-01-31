@@ -1,0 +1,2 @@
+[console_scripts]
+aether-lens = aether_lens.entrypoint:main

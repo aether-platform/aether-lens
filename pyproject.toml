@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aether-lens"
+version = "0.1.0"
+description = "Aether Platform Live Testing & AI Analysis"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "requests",
+    "watchdog",
+    "playwright",
+    "reportportal-client",
+    "allure-python-commons",
+]
+
+[project.scripts]
+aether-lens = "aether_lens.entrypoint:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
