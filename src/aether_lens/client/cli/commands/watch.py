@@ -43,8 +43,31 @@ console = Console(stderr=True)
     "--app-url",
     help="Base URL of the application under test (Default: http://localhost:4321)",
 )
+@click.option(
+    "--allure",
+    "--allure-strategy",
+    "allure_strategy",
+    type=click.Choice(["none", "ephemeral", "external", "kubernetes", "docker"]),
+    help="Allure reporting strategy (env: ALLURE_STRATEGY)",
+)
+@click.option(
+    "--launch-allure/--no-launch-allure",
+    default=None,
+    help="Launch ephemeral Allure dashboard during watch (Default: True if no endpoint)",
+)
 def watch(
-    target, strategy, browser_strategy, browser_url, launch_browser, headless, app_url
+    target,
+    strategy,
+    browser_strategy,
+    browser_url,
+    launch_browser,
+    headless,
+    app_url,
+    allure_strategy,
+    launch_allure,
+    allure_endpoint,
+    allure_project_id,
+    allure_api_key,
 ):
     """Watch for changes and run pipeline (In-Pod mode)."""
     from aether_lens.client.cli.main import container
@@ -135,7 +158,54 @@ def watch(
     # but for now, let's just initialize the dashboard with empty and it will populate.
     app = PipelineDashboard([], strategy_name=selected_strategy)
 
+    # Resolve Allure Strategy (CLI > Env > Config)
+    allure_strategy = (
+        allure_strategy or os.getenv("ALLURE_STRATEGY") or config.get("allure_strategy")
+    )
+    allure_endpoint = (
+        allure_endpoint or os.getenv("ALLURE_ENDPOINT") or config.get("allure_endpoint")
+    )
+    allure_project_id = (
+        allure_project_id
+        or os.getenv("ALLURE_PROJECT_ID")
+        or config.get("allure_project_id", "default")
+    )
+    allure_api_key = (
+        allure_api_key or os.getenv("ALLURE_API_KEY") or config.get("allure_api_key")
+    )
+
+    if allure_strategy == "none":
+        launch_allure = False
+    elif allure_strategy in ["ephemeral", "kubernetes"]:
+        launch_allure = True
+    elif allure_strategy == "external":
+        launch_allure = False
+    elif not allure_strategy:
+        # Smart default
+        if launch_allure is None:
+            launch_allure = not bool(allure_endpoint)
+
+    # Manage ephemeral Allure Dashboard if requested
+    allure_provider = None
+    if launch_allure:
+        from aether_lens.core.report import KubernetesAllureProvider
+
+        allure_provider = KubernetesAllureProvider()
+
     async def run_logic():
+        # Start Allure if requested
+        if allure_provider:
+            try:
+                endpoint = await allure_provider.start()
+                os.environ["ALLURE_ENDPOINT"] = endpoint
+            except Exception as e:
+                console.print(f"[yellow]Warning: Failed to launch Allure: {e}[/yellow]")
+
+        if allure_project_id:
+            os.environ["ALLURE_PROJECT_ID"] = allure_project_id
+        if allure_api_key:
+            os.environ["ALLURE_API_KEY"] = allure_api_key
+
         # Wait for app to be ready
         while not app.is_mounted:
             await asyncio.sleep(0.1)
@@ -177,6 +247,8 @@ def watch(
             observer.stop()
             observer.join()
             await browser_provider.close()
+            if allure_provider:
+                await allure_provider.stop()
 
     async def main_loop():
         # Start TUI and logic concurrently

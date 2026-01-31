@@ -9,38 +9,36 @@ from aether_lens.core.pipeline import load_config, run_pipeline
 @click.command()
 @click.argument("target", required=False)
 @click.option(
-    "--analysis",
-    "--analysis-strategy",
-    "--strategy",
-    "strategy",
-    type=click.Choice(["auto", "frontend", "backend", "microservice", "custom"]),
-    help="AI Analysis strategy (env: AETHER_ANALYSIS)",
+    "--allure",
+    "--allure-strategy",
+    "allure_strategy",
+    type=click.Choice(["none", "ephemeral", "external", "kubernetes", "docker"]),
+    help="Allure reporting strategy. Must match execution environment (env: ALLURE_STRATEGY)",
 )
 @click.option(
-    "--browser",
-    "--browser-strategy",
-    "browser_strategy",
-    type=click.Choice(["local", "docker", "k8s", "inpod", "dry-run"]),
-    required=False,
-    help="Browser execution strategy (env: AETHER_BROWSER)",
+    "--allure-endpoint",
+    help="Remote Allure API endpoint (env: ALLURE_ENDPOINT)",
 )
 @click.option(
-    "--launch-browser/--no-launch-browser",
-    default=None,
-    help="Launch ephemeral browser container/pod (Default: False, or True if --headless implied)",
+    "--allure-project-id",
+    help="Project ID for team isolation (env: ALLURE_PROJECT_ID)",
 )
 @click.option(
-    "--headless/--headed",
-    default=False,
-    help="Run in headless mode (Implies --browser docker if not set)",
-)
-@click.option("--browser-url", help="CDP URL for docker/inpod strategy")
-@click.option(
-    "--app-url",
-    help="Base URL of the application under test (Default: http://localhost:4321)",
+    "--allure-api-key",
+    help="API Key for remote Allure (env: ALLURE_API_KEY)",
 )
 def run(
-    target, strategy, browser_strategy, browser_url, launch_browser, headless, app_url
+    target,
+    strategy,
+    browser_strategy,
+    browser_url,
+    launch_browser,
+    headless,
+    app_url,
+    allure_strategy,
+    allure_endpoint,
+    allure_project_id,
+    allure_api_key,
 ):
     """Run Aether Lens pipeline once."""
     from aether_lens.client.cli.main import container
@@ -50,9 +48,7 @@ def run(
     config = load_config(target_dir)
 
     # 2. Resolve browser strategy (CLI > Env > Config > Default)
-    # Smart Default: If no browser specified, decide based on headless flag
-    # --headless -> docker (managed), --headed -> local (headed)
-
+    # ... (browser logic remains the same)
     env_browser = os.getenv("AETHER_BROWSER")
     config_browser = config.get("browser_strategy")
 
@@ -64,10 +60,8 @@ def run(
         else:
             browser_strategy = "local"
     else:
-        # Fallback to defaults if partially set
         browser_strategy = browser_strategy or env_browser or config_browser or "local"
 
-    # Default launch_browser to False if not set by smart logic or user
     if launch_browser is None:
         launch_browser = False
     if not browser_url:
@@ -81,10 +75,7 @@ def run(
     container.config.launch_browser.from_value(launch_browser)
     container.config.headless.from_value(headless)
 
-    target_dir = os.path.abspath(target or os.getenv("TARGET_DIR") or ".")
-
-    # config already loaded above
-
+    # Resolve strategy and context
     selected_strategy = (
         strategy or os.getenv("AETHER_ANALYSIS") or config.get("strategy", "auto")
     )
@@ -95,6 +86,34 @@ def run(
     context = os.getenv("KILOCODE_CONTEXT", "default-aether")
     rp_url = os.getenv("REPORTPORTAL_URL")
     allure_dir = os.getenv("ALLURE_RESULTS_DIR")
+
+    # Allure Config (CLI > Env > Config)
+    allure_strategy = (
+        allure_strategy or os.getenv("ALLURE_STRATEGY") or config.get("allure_strategy")
+    )
+    allure_endpoint = (
+        allure_endpoint or os.getenv("ALLURE_ENDPOINT") or config.get("allure_endpoint")
+    )
+    allure_project_id = (
+        allure_project_id
+        or os.getenv("ALLURE_PROJECT_ID")
+        or config.get("allure_project_id", "default")
+    )
+    allure_api_key = (
+        allure_api_key or os.getenv("ALLURE_API_KEY") or config.get("allure_api_key")
+    )
+
+    if allure_strategy == "none":
+        allure_endpoint = None
+    elif allure_strategy in ["ephemeral", "kubernetes"] and not allure_endpoint:
+        pass
+
+    if allure_endpoint:
+        os.environ["ALLURE_ENDPOINT"] = allure_endpoint
+    if allure_project_id:
+        os.environ["ALLURE_PROJECT_ID"] = allure_project_id
+    if allure_api_key:
+        os.environ["ALLURE_API_KEY"] = allure_api_key
 
     # Run the pipeline logic
     asyncio.run(

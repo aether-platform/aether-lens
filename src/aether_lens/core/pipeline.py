@@ -665,6 +665,20 @@ async def run_pipeline(
             "    - Allure Dashboard: [bold cyan]http://localhost:5050[/bold cyan] (Real-time)"
         )
         console.print(f"    - Allure Results Raw: {allure_path}", style="dim")
+
+        # Sync to remote Allure API if configured
+        allure_endpoint = os.getenv("ALLURE_ENDPOINT")
+        allure_key = os.getenv("ALLURE_API_KEY")
+        if allure_endpoint:
+            console.print(f" -> [Pipeline] Syncing to Allure API: {allure_endpoint}...")
+            success, msg = report.sync_results_to_allure_api(
+                target_dir, api_url=allure_endpoint, api_key=allure_key
+            )
+            if success:
+                console.print(f"    - [green]Sync OK:[/green] {msg}")
+            else:
+                console.print(f"    - [yellow]Sync Warning:[/yellow] {msg}")
+
     except Exception as e:
         console.print(f"[yellow]Warning: Failed to generate reports: {e}[/yellow]")
 

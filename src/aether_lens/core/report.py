@@ -7,6 +7,10 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from rich.console import Console
+
+console = Console(stderr=True)
+
 
 def image_to_base64(path):
     if not path or not os.path.exists(path):
@@ -231,3 +235,148 @@ def export_to_allure(results, target_dir):
             json.dump(allure_result, f, indent=2)
 
     return str(allure_dir)
+
+
+def sync_results_to_allure_api(
+    target_dir, api_url="http://localhost:5050", project_id="default", api_key=None
+):
+    """
+    Syncs results from .aether/allure-results to a remote Allure Docker Service via API.
+    """
+    import httpx
+
+    allure_dir = Path(target_dir) / ".aether" / "allure-results"
+    if not allure_dir.exists():
+        return False, "No allure-results directory found."
+
+    results_data = []
+    for file in allure_dir.glob("*"):
+        if file.is_file():
+            with open(file, "rb") as f:
+                content = base64.b64encode(f.read()).decode("utf-8")
+                results_data.append({"file_name": file.name, "content_base64": content})
+
+    if not results_data:
+        return False, "No results to sync."
+
+    payload = {"results": results_data}
+    sync_url = f"{api_url.rstrip('/')}/send-results?project_id={project_id}"
+
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        response = httpx.post(sync_url, json=payload, headers=headers, timeout=30.0)
+        if response.status_code == 200:
+            return True, "Successfully synced results to Allure Dashboard."
+        else:
+            return (
+                False,
+                f"API Error ({response.status_code}): {response.text.strip()[:100]}",
+            )
+    except Exception as e:
+        return False, f"Failed to connect to Allure API: {e}"
+
+
+class KubernetesAllureProvider:
+    """Handles ephemeral Allure Dashboard lifecycle in Kubernetes."""
+
+    def __init__(self, namespace="default", port=5050):
+        self.namespace = namespace
+        self.port = port
+        self.pod_name = None
+        self._pf_process = None
+        self.endpoint_url = f"http://localhost:{port}"
+
+    async def start(self):
+        import subprocess
+
+        self.pod_name = f"allure-dash-{uuid.uuid4().hex[:8]}"
+        console.print(
+            f" -> [Allure] Spawning ephemeral Allure Dashboard pod/{self.pod_name}...",
+            style="dim",
+        )
+        try:
+            # Simple run command, we don't need a full deployment for ephemeral use
+            subprocess.run(
+                [
+                    "kubectl",
+                    "run",
+                    self.pod_name,
+                    "--image=frankescobar/allure-docker-service:latest",
+                    f"--namespace={self.namespace}",
+                    "--port=5050",
+                    "--env=CHECK_RESULTS_EVERY_SECONDS=3",
+                    "--env=KEEP_HISTORY=1",
+                    "--restart=Never",
+                ],
+                check=True,
+                capture_output=True,
+            )
+
+            console.print(
+                " -> [Allure] Waiting for Dashboard to be ready...", style="dim"
+            )
+            subprocess.run(
+                [
+                    "kubectl",
+                    "wait",
+                    "--for=condition=Ready",
+                    f"pod/{self.pod_name}",
+                    f"--namespace={self.namespace}",
+                    "--timeout=60s",
+                ],
+                check=True,
+                capture_output=True,
+            )
+
+            console.print(
+                f" -> [Allure] Port-forwarding {self.pod_name} 5050 -> {self.port}...",
+                style="dim",
+            )
+            self._pf_process = subprocess.Popen(
+                [
+                    "kubectl",
+                    "port-forward",
+                    f"pod/{self.pod_name}",
+                    f"{self.port}:5050",
+                    f"--namespace={self.namespace}",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            time.sleep(2)
+            return self.endpoint_url
+
+        except Exception as e:
+            console.print(f"[red]Allure launch failed: {e}[/red]")
+            await self.stop()
+            raise
+
+    async def stop(self):
+        import subprocess
+
+        if self._pf_process:
+            self._pf_process.terminate()
+            self._pf_process.wait()
+            self._pf_process = None
+
+        if self.pod_name:
+            console.print(
+                f" -> [Allure] Cleaning up Dashboard pod/{self.pod_name}...",
+                style="dim",
+            )
+            subprocess.run(
+                [
+                    "kubectl",
+                    "delete",
+                    "pod",
+                    self.pod_name,
+                    f"--namespace={self.namespace}",
+                    "--force",
+                    "--grace-period=0",
+                ],
+                capture_output=True,
+            )
+            self.pod_name = None

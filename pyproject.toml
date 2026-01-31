@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aether-lens"
-version = "0.1.6"
+name = "aether-lens-cli"
+version = "0.1.13"
 description = "Aether Platform Live Testing & AI Analysis"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,7 +32,7 @@ browser = [
 ]
 
 [project.scripts]
-aether-lens = "aether_lens.client.cli.main:main"
+aether-lens-cli = "aether_lens.client.cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
