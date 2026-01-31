@@ -178,9 +178,12 @@ def watch(
             observer.join()
             await browser_provider.close()
 
-    try:
-        # Run TUI and logic
+    async def main_loop():
+        # Start TUI and logic concurrently
         asyncio.create_task(run_logic())
-        asyncio.run(app.run_async())
+        await app.run_async()
+
+    try:
+        asyncio.run(main_loop())
     except KeyboardInterrupt:
         console.print("\n[Lens Watch] Stopped.", style="dim")
