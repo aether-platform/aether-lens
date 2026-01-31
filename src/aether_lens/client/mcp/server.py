@@ -51,8 +51,8 @@ def run_lens_test(
 
     import asyncio
 
-    asyncio.run(run_pipeline(target_dir=target_dir, strategy=strategy))
-    return f"Lens analysis complete for {target_dir}."
+    results = asyncio.run(run_pipeline(target_dir=target_dir, strategy=strategy))
+    return results
 
 
 @mcp.tool()

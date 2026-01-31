@@ -14,7 +14,7 @@ class BrowserProvider(ABC):
         self._browser = None
 
     @abstractmethod
-    async def start(self, playwright):
+    async def start(self, playwright, display_callback=None):
         """Pre-starts/connects the browser, possibly prompting the user."""
         pass
 
@@ -38,8 +38,12 @@ class LocalBrowserProvider(BrowserProvider):
         super().__init__()
         self.headless = headless
 
-    async def start(self, playwright):
-        if sys.stdin.isatty():
+    async def start(self, playwright, display_callback=None):
+        if display_callback:
+            confirmed = await display_callback("Launch local browser?", default=True)
+            if not confirmed:
+                raise RuntimeError("Local browser launch cancelled by user.")
+        elif sys.stdin.isatty():
             if not Confirm.ask(
                 "[white] -> [Browser] Launch local browser?[/white]", default=True
             ):
@@ -60,7 +64,7 @@ class CDPBrowserProvider(BrowserProvider):
         super().__init__()
         self.endpoint_url = endpoint_url
 
-    async def start(self, playwright):
+    async def start(self, playwright, display_callback=None):
         try:
             console.print(
                 f" -> [Browser] Connecting to {self.endpoint_url}...", style="dim"
@@ -73,17 +77,26 @@ class CDPBrowserProvider(BrowserProvider):
             console.print(
                 f"[bold yellow][Warning] Could not connect to {self.endpoint_url}: {e}[/bold yellow]"
             )
-            if sys.stdin.isatty():
-                if Confirm.ask("Launch local browser as fallback?", default=True):
-                    console.print(
-                        " -> [Browser] Switching to Local Browser strategy...",
-                        style="dim",
-                    )
-                    self._browser = await playwright.chromium.launch()
-                    console.print(
-                        " -> [Browser] Local browser started (fallback).", style="dim"
-                    )
-                    return
+            confirmed = False
+            if display_callback:
+                confirmed = await display_callback(
+                    "Launch local browser as fallback?", default=True
+                )
+            elif sys.stdin.isatty():
+                confirmed = Confirm.ask(
+                    "Launch local browser as fallback?", default=True
+                )
+
+            if confirmed:
+                console.print(
+                    " -> [Browser] Switching to Local Browser strategy...",
+                    style="dim",
+                )
+                self._browser = await playwright.chromium.launch()
+                console.print(
+                    " -> [Browser] Local browser started (fallback).", style="dim"
+                )
+                return
             raise
 
     async def get_browser(self, playwright):

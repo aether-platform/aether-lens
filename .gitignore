@@ -36,3 +36,5 @@ venv.bak/
 sample/
 screenshot_*.png
 aether-lens.config.json
+__pycache__/
+*.egg-info/

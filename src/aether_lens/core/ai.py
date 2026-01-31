@@ -69,22 +69,29 @@ def run_analysis(
 
     response = {
         "change_type": "Frontend",
-        "analysis": f"独自エージェントによる解析: {len(diff_text)} bytes の変更を検出。Frontend Strategy に基づき、UIへの影響を検証します。",
+        "analysis": f"Aether Lens Docs 解析: {len(diff_text)} bytes の変更を検出。VTI コンセプトに基づき、ビジュアル回帰およびビルド整合性を検証します。",
         "recommended_tests": [
             {
                 "type": "visual",
-                "label": "Desktop",
+                "label": "Desktop Home (Aesthetics)",
                 "browser": "chromium",
                 "viewport": "1280x720",
-                "path": "/starlight/index.html",
+                "path": "/",
+            },
+            {
+                "type": "visual",
+                "label": "Mobile Home (Responsive)",
+                "browser": "chromium",
+                "viewport": "375x667",
+                "path": "/",
             },
             {
                 "type": "command",
-                "label": "Build Check",
-                "command": "npm run build --dry-run",
+                "label": "Production Build & Link Check",
+                "command": "npm run build",
             },
         ],
-        "reasoning": "マルチディスプレイサイズでのレイアウト整合性を確認するため、主要な2つの解像度を推奨します。",
+        "reasoning": "ブランドサイトとしての整合性を守るため、主要な Hero セクションのマルチデバイス表示と、ドキュメントのビルド健全性を優先して推奨します。",
     }
     return response
 

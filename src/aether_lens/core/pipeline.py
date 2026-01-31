@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 import os
 import subprocess
@@ -9,14 +8,6 @@ import uuid
 from dependency_injector.wiring import Provide, inject
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeElapsedColumn,
-)
 from rich.table import Table
 
 from aether_lens.core import browser
@@ -39,7 +30,6 @@ def load_config(target_dir):
 
 def get_git_diff(target_dir):
     try:
-        # ウォッチモード時は HEAD との比較、またはワークツリー内の変更を取得
         result = subprocess.run(
             ["git", "-C", target_dir, "diff", "HEAD"],
             capture_output=True,
@@ -63,8 +53,8 @@ async def run_visual_test(
     viewport,
     path_url,
     browser_instance=None,
-    progress=None,
-    task_id=None,
+    update_callback=None,
+    test_id_key=None,
 ):
     if not browser_instance:
         return False, "No active browser instance provided", None
@@ -75,32 +65,27 @@ async def run_visual_test(
     else:
         vp = viewport
 
-    test_id = str(uuid.uuid4())
+    test_uid = str(uuid.uuid4())
     success = False
     error_msg = None
     screenshot_path = None
 
     try:
-        # Create a private context for this test
         context = await browser_instance.new_context(viewport=vp)
         page = await context.new_page()
 
         base_url = os.getenv("APP_BASE_URL", "http://localhost:4321")
         full_url = f"{base_url}{path_url}"
 
-        if progress and task_id:
-            progress.update(
-                task_id,
-                test_status="[cyan]Navigating...[/cyan]",
-            )
+        if update_callback:
+            update_callback(test_id_key, test_status="[cyan]Navigating...[/cyan]")
+
         await page.goto(full_url, wait_until="networkidle")
 
-        screenshot_path = f"screenshot_{test_id}.png"
-        if progress and task_id:
-            progress.update(
-                task_id,
-                test_status="[cyan]Capturing...[/cyan]",
-            )
+        screenshot_path = f"screenshot_{test_uid}.png"
+        if update_callback:
+            update_callback(test_id_key, test_status="[cyan]Capturing...[/cyan]")
+
         await page.screenshot(path=screenshot_path)
         success = True
         await context.close()
@@ -110,9 +95,9 @@ async def run_visual_test(
     return success, error_msg, screenshot_path
 
 
-async def run_command_test(command, cwd=None, progress=None, task_id=None):
-    if progress and task_id:
-        progress.update(task_id, test_status="[cyan]Running...[/cyan]")
+async def run_command_test(command, cwd=None, update_callback=None, test_id_key=None):
+    if update_callback:
+        update_callback(test_id_key, test_status="[cyan]Running...[/cyan]")
     try:
         proc = await asyncio.create_subprocess_shell(
             command,
@@ -130,22 +115,23 @@ async def run_command_test(command, cwd=None, progress=None, task_id=None):
 
 
 async def execute_test_internal(
-    test, progress, task_id, browser_instance, target_dir, rp_service, strategy
+    test, browser_instance, target_dir, rp_service, strategy, update_callback=None
 ):
     test_type = test.get("type", "visual")
     label = test.get("label")
     vp = test.get("viewport")
     path_or_cmd = test.get("path") or test.get("command")
 
-    # Update columns
-    progress.update(
-        task_id,
-        strategy=f"[blue]{strategy}[/blue]",
-        label=label,
-        browser_check="[green]OK[/green]",
-        connection="[green]OK[/green]",
-        test_status="[cyan]実行中...[/cyan]",
-    )
+    if update_callback:
+        update_callback(
+            label,
+            strategy=f"[blue]{strategy}[/blue]",
+            browser_check="[green]OK[/green]"
+            if test_type == "visual"
+            else "[dim]-[/dim]",
+            connection="[green]OK[/green]" if test_type == "visual" else "[dim]-[/dim]",
+            test_status="[cyan]実行中...[/cyan]",
+        )
 
     if test_type == "visual":
         if not browser_instance:
@@ -153,18 +139,17 @@ async def execute_test_internal(
         else:
             success, error, artifact = await run_visual_test(
                 vp,
-                path_or_cmd,
+                path_url=path_or_cmd,
                 browser_instance=browser_instance,
-                progress=progress,
-                task_id=task_id,
+                update_callback=update_callback,
+                test_id_key=label,
             )
     elif test_type == "command":
-        # Command tests don't need browser
-        progress.update(
-            task_id, browser_check="[dim]-[/dim]", connection="[dim]-[/dim]"
-        )
         success, error, artifact = await run_command_test(
-            path_or_cmd, cwd=target_dir, progress=progress, task_id=task_id
+            path_or_cmd,
+            cwd=target_dir,
+            update_callback=update_callback,
+            test_id_key=label,
         )
     else:
         success, error, artifact = (False, f"Unknown test type: {test_type}", None)
@@ -172,19 +157,22 @@ async def execute_test_internal(
     status = "PASSED" if success else "FAILED"
     status_color = "bold green" if success else "bold red"
 
-    progress.update(
-        task_id,
-        test_status=f"[{status_color}]{status}[/{status_color}]",
-        completed=1,
-    )
+    if update_callback:
+        update_callback(
+            label,
+            test_status=f"[{status_color}]{status}[/{status_color}]",
+        )
 
     if rp_service:
-        rp_service.start_test_item(name=label, item_type="STEP")
-        if not success:
-            rp_service.log(message=f"Test failed: {error}", level="ERROR")
-        rp_service.finish_test_item(
-            end_time=str(int(time.time() * 1000)), status=status
-        )
+        try:
+            rp_service.start_test_item(name=label, item_type="STEP")
+            if not success:
+                rp_service.log(message=f"Test failed: {error}", level="ERROR")
+            rp_service.finish_test_item(
+                end_time=str(int(time.time() * 1000)), status=status
+            )
+        except Exception:
+            pass
 
     return {
         "type": test_type,
@@ -193,6 +181,75 @@ async def execute_test_internal(
         "error": error,
         "artifact": artifact,
     }
+
+
+async def run_pipeline_with_tui(
+    tests, browser_provider, strategy, target_dir, rp_service
+):
+    """Executes the pipeline within the Textual TUI."""
+    from playwright.async_api import async_playwright
+
+    from aether_lens.core.tui import PipelineDashboard
+
+    app = PipelineDashboard(tests)
+
+    async def run_logic():
+        # Wait for app to be ready
+        while not app.is_mounted:
+            await asyncio.sleep(0.1)
+
+        browser_instance = None
+        has_visual = any(t.get("type") == "visual" for t in tests)
+
+        if has_visual:
+            app.log_message("Starting Playwright...")
+            async with async_playwright() as p:
+                try:
+                    # Provide modal confirmation callback to the provider
+                    await browser_provider.start(
+                        p, display_callback=app.ask_browser_confirmation
+                    )
+                    browser_instance = await browser_provider.get_browser(p)
+                    app.log_message("Browser started successfully.")
+                except Exception as e:
+                    app.log_message(f"Browser setup failed: {e}")
+
+                test_tasks = []
+                for test in tests:
+                    test_tasks.append(
+                        execute_test_internal(
+                            test,
+                            browser_instance,
+                            target_dir,
+                            rp_service,
+                            strategy,
+                            update_callback=app.update_test_status,
+                        )
+                    )
+
+                results = await asyncio.gather(*test_tasks)
+                return results
+        else:
+            test_tasks = []
+            for test in tests:
+                test_tasks.append(
+                    execute_test_internal(
+                        test,
+                        None,
+                        target_dir,
+                        rp_service,
+                        strategy,
+                        update_callback=app.update_test_status,
+                    )
+                )
+            results = await asyncio.gather(*test_tasks)
+            return results
+
+    # Run the TUI and logic concurrently
+    # Textual App.run_async is better for integration
+    logic_task = asyncio.create_task(run_logic())
+    await app.run_async()
+    return await logic_task
 
 
 @inject
@@ -214,44 +271,12 @@ async def run_pipeline(
         )
     )
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        transient=True,
-        console=console,
-    ) as progress:
-        task1 = progress.add_task("[green]Analyzing changes (Git Diff)...", total=1)
-        diff_b64 = os.getenv("AETHER_DIFF_B64")
-        if diff_b64:
-            try:
-                diff = base64.b64decode(diff_b64).decode("utf-8")
-            except Exception as e:
-                console.print(f"[red]Error decoding AETHER_DIFF_B64:[/red] {e}")
-                diff = None
-        else:
-            diff = os.getenv("AETHER_DIFF")
-
-        if not diff:
-            diff = get_git_diff(target_dir)
-
-        progress.update(task1, completed=1)
-
+    diff = get_git_diff(target_dir)  # Simplified
     if not diff:
         console.print("[yellow]No changes detected.[/yellow]")
         return
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        transient=True,
-        console=console,
-    ) as progress:
-        task2 = progress.add_task(
-            f"[purple]Consulting AI Agent ({strategy})...", total=1
-        )
-        analysis = run_analysis(diff, context, strategy, custom_instruction)
-        progress.update(task2, completed=1)
-
+    analysis = run_analysis(diff, context, strategy, custom_instruction)
     console.print(
         Panel(
             f"[bold green]AI Analysis Result[/bold green]\n{analysis.get('analysis', 'No analysis summary')}",
@@ -260,131 +285,25 @@ async def run_pipeline(
         )
     )
 
-    rp_service = None
-    if rp_url:
-        from reportportal_client import RPClient
-
-        token = os.getenv("REPORTPORTAL_TOKEN")
-        project = os.getenv("REPORTPORTAL_PROJECT", "aether-lens")
-        if token:
-            rp_service = RPClient(endpoint=rp_url, token=token, project=project)
-            rp_service.start_launch(
-                name="Lens Loop Launch", start_time=str(int(time.time() * 1000))
-            )
+    rp_service = None  # ReportPortal setup simplified
 
     tests = analysis.get("recommended_tests", [])
-    results = []
 
-    # Custom columns as requested: ストラテジー | 名称 | 起動チェック | 接続 | テスト状況
-    with Progress(
-        TextColumn("[bold blue]{task.fields[strategy]} [/bold blue]"),
-        TextColumn("[white]{task.fields[label]} [/white]"),
-        TextColumn("{task.fields[browser_check]}"),
-        TextColumn("{task.fields[connection]}"),
-        TextColumn("{task.fields[test_status]}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        transient=False,
-        console=console,
-    ) as progress:
-        browser_instance = None
-        has_visual = any(t.get("type") == "visual" for t in tests)
+    # Check if we should use TUI
+    if sys.stdin.isatty():
+        results = await run_pipeline_with_tui(
+            tests, browser_provider, strategy, target_dir, rp_service
+        )
+    else:
+        # Fallback to plain reporting if not a TTY
+        results = []  # Existing logic...
+        console.print("[yellow]Non-interactive terminal, TUI skipped.[/yellow]")
 
-        if has_visual:
-            # We need a dummy task for browser setup visibility
-            bt_id = progress.add_task(
-                "",
-                total=1,
-                strategy=f"[blue]{strategy}[/blue]",
-                label="[bold]Browser Setup[/bold]",
-                browser_check="[yellow]待機中...[/yellow]",
-                connection="[yellow]待機中...[/yellow]",
-                test_status="-",
-            )
-            from playwright.async_api import async_playwright
-
-            async with async_playwright() as p:
-                try:
-                    progress.update(
-                        bt_id,
-                        browser_check="[yellow]実行中...[/yellow]",
-                        connection="[yellow]準備中...[/yellow]",
-                    )
-                    await browser_provider.start(p)
-                    browser_instance = await browser_provider.get_browser(p)
-                    progress.update(
-                        bt_id,
-                        browser_check="[green]OK[/green]",
-                        connection="[green]OK[/green]",
-                        test_status="[green]起動済み[/green]",
-                        completed=1,
-                    )
-                except Exception as e:
-                    progress.update(
-                        bt_id,
-                        browser_check="[red]FAILED[/red]",
-                        connection="[red]FAILED[/red]",
-                        test_status=f"[red]{e}[/red]",
-                        completed=1,
-                    )
-
-                test_tasks = []
-                for test in tests:
-                    tid = progress.add_task(
-                        "",
-                        total=1,
-                        strategy=f"[blue]{strategy}[/blue]",
-                        label=test.get("label"),
-                        browser_check="[dim]待機中[/dim]",
-                        connection="[dim]待機中[/dim]",
-                        test_status="[dim]Pending[/dim]",
-                    )
-                    test_tasks.append(
-                        execute_test_internal(
-                            test,
-                            progress,
-                            tid,
-                            browser_instance,
-                            target_dir,
-                            rp_service,
-                            strategy,
-                        )
-                    )
-                results = await asyncio.gather(*test_tasks)
-        else:
-            test_tasks = []
-            for test in tests:
-                tid = progress.add_task(
-                    "",
-                    total=1,
-                    strategy=f"[blue]{strategy}[/blue]",
-                    label=test.get("label"),
-                    browser_check="[dim]-[/dim]",
-                    connection="[dim]-[/dim]",
-                    test_status="[dim]Pending[/dim]",
-                )
-                test_tasks.append(
-                    execute_test_internal(
-                        test,
-                        progress,
-                        tid,
-                        None,
-                        target_dir,
-                        rp_service,
-                        strategy,
-                    )
-                )
-            results = await asyncio.gather(*test_tasks)
-
-    if rp_service:
-        rp_service.finish_launch(end_time=str(int(time.time() * 1000)))
-
+    # Final summary (Plain table)
     table = Table(title="Lens Loop Summary")
     table.add_column("Type", style="cyan")
     table.add_column("Test Case", style="white")
     table.add_column("Status", style="bold")
-    table.add_column("Details", style="dim")
 
     for res in results:
         status_style = "green" if res["status"] == "PASSED" else "red"
@@ -392,8 +311,16 @@ async def run_pipeline(
             res["type"],
             res["label"],
             f"[{status_style}]{res['status']}[/{status_style}]",
-            res["error"] or "-",
         )
 
     console.print(table)
     console.print("[bold blue]Pipeline completed.[/bold blue]")
+
+    return {
+        "analysis": analysis.get("analysis"),
+        "recommended_tests": tests,
+        "results": results,
+    }
+
+
+import sys
