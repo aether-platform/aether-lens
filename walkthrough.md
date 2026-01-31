@@ -5,8 +5,10 @@ Aether Platform 向けのライブテスト機能「Aether Lens」の PoC 基盤
 ## 1. 機能概要
 
 - **Lens Loop**: ローカルのコード変更を検知し、K8s 上のコンテナに即座に同期してテストを実行する開発ループ。
-- **AI 解析**: 変更内容 (Git Diff) を AI が解析し、影響範囲に基づいた最適なテストプラン（解像度、ブラウザ、パス）を提案。
-- **リモート実行**: ローカル環境のリソースを使わず、K8s クラスター上の Browserless コンテナを使用してテストを実行。
+- **AI 解析 & マルチストラテジー**: 変更内容 (Git Diff) を AI が解析し、複数のストラテジー（frontend, seo 等）を組み合わせて最適なテストプランを提案。
+- **VRT (Visual Regression Testing)**: `pixelmatch` を使用して、前回の実行結果（Baseline）と現在のスクリーンショットをピクセル単位で比較。
+- **Conformance Dashboard**: 実行結果や VRT の差分をブラウザで直感的に確認できる HTML レポートと、Allure 互換のデータ出力を提供。
+- **リモート実行**: ローカル環境のリソースを使わず、Docker/K8s 上の Browserless コンテナを使用してテストを実行。
 
 ## 2. コンポーネント構成
 
@@ -91,16 +93,28 @@ aether-lens run --browser docker --launch-browser
 aether-lens run --headless
 ```
 
+#### 4. マルチストラテジー設定
+
+`aether-lens.config.json` で複数のストラテジーを定義すると、それらを同時に実行できます。
+
+```json
+{
+  "strategies": ["frontend", "seo"]
+}
+```
+
+#### 6. リアルタイム・ダッシュボード (Allure Docker Service)
+
+既存の **Allure Docker Service** を活用することで、リアルタイムなテスト結果の可視化が可能です。このサービスは `.aether/allure-results` ディレクトリを監視し、結果が更新されるたびにダッシュボードを自動更新します。
+
+```bash
+# Kubernetes に Allure Dashboard をデプロイ
+kubectl apply -f allure-dashboard.yaml
+```
+
 ## Verification Summary
 
-- **Browser Connection Robustness**:
-  - Replaced `subprocess` with `docker` Python SDK for reliable container management.
-  - Implemented random port assignment (port 0 binding) to prevent conflicts.
-  - Added exponential backoff (up to 60s) using `httpx` for reliable readiness checks.
-- **Persistent Watch Session**:
-  - Updated `watch` command to keep the browser container alive during the session.
-  - Browser is only launched once and reused for all pipeline runs in watch mode.
-  - Proper cleanup ensures container is removed on exit (Ctrl+C).
-- **Core Refactoring**:
-  - Validated `aether-lens` package structure and `uvx` compatibility.
-  - Verified `run` (ephemeral) vs `watch` (persistent) behavior.
+- **Allure Docker Integration**:
+  - `allure-dashboard.yaml` を作成し、既存の Allure イメージを使用してリアルタイム更新を実現しました。
+  - 自作のポーリングロジックを削除し、業界標準の Allure ツールに統合しました。
+    モードや非 TTY 環境での TUI 起動を抑制し、ハングアップを防止しました。

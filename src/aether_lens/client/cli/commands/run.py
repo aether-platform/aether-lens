@@ -35,7 +35,13 @@ from aether_lens.core.pipeline import load_config, run_pipeline
     help="Run in headless mode (Implies --browser docker if not set)",
 )
 @click.option("--browser-url", help="CDP URL for docker/inpod strategy")
-def run(target, strategy, browser_strategy, browser_url, launch_browser, headless):
+@click.option(
+    "--app-url",
+    help="Base URL of the application under test (Default: http://localhost:4321)",
+)
+def run(
+    target, strategy, browser_strategy, browser_url, launch_browser, headless, app_url
+):
     """Run Aether Lens pipeline once."""
     from aether_lens.client.cli.main import container
 
@@ -99,6 +105,7 @@ def run(target, strategy, browser_strategy, browser_url, launch_browser, headles
             rp_url=rp_url,
             allure_dir=allure_dir,
             strategy=selected_strategy,
-            custom_instruction=custom_instruction,  # Re-added custom_instruction
+            custom_instruction=custom_instruction,
+            app_url=app_url,
         )
     )

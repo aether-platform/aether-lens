@@ -39,7 +39,13 @@ console = Console(stderr=True)
     help="Run in headless mode (Implies --browser docker if not set)",
 )
 @click.option("--browser-url", help="CDP URL for docker/inpod strategy")
-def watch(target, strategy, browser_strategy, browser_url, launch_browser, headless):
+@click.option(
+    "--app-url",
+    help="Base URL of the application under test (Default: http://localhost:4321)",
+)
+def watch(
+    target, strategy, browser_strategy, browser_url, launch_browser, headless, app_url
+):
     """Watch for changes and run pipeline (In-Pod mode)."""
     from aether_lens.client.cli.main import container
 
@@ -118,33 +124,14 @@ def watch(target, strategy, browser_strategy, browser_url, launch_browser, headl
     # Get persistent browser provider
     browser_provider = container.browser_provider()
 
-    try:
+    async def async_watch():
+        loop = asyncio.get_running_loop()
 
-        def on_change(path):
+        def on_change(file_path):
             console.print(
-                f"\n[Lens Watch] Change detected: {path}", style="bold yellow"
+                f"\n[Lens Watch] Change detected: {file_path}", style="bold yellow"
             )
-            try:
-                asyncio.run(
-                    run_pipeline(
-                        target_dir,
-                        browser_url,
-                        context,
-                        rp_url=rp_url,
-                        allure_dir=allure_dir,
-                        strategy=selected_strategy,
-                        custom_instruction=custom_instruction,
-                        browser_provider=browser_provider,
-                        use_tui=False,
-                        close_browser=False,  # Keep browser alive
-                    )
-                )
-            except Exception as e:
-                console.print(f"[red]Pipeline error:[/red] {e}")
-
-        # Initial run
-        try:
-            asyncio.run(
+            asyncio.run_coroutine_threadsafe(
                 run_pipeline(
                     target_dir,
                     browser_url,
@@ -155,18 +142,43 @@ def watch(target, strategy, browser_strategy, browser_url, launch_browser, headl
                     custom_instruction=custom_instruction,
                     browser_provider=browser_provider,
                     use_tui=False,
-                    close_browser=False,  # Keep browser alive
-                )
+                    close_browser=False,
+                    app_url=app_url,
+                ),
+                loop,
+            )
+
+        # Initial run
+        try:
+            await run_pipeline(
+                target_dir,
+                browser_url,
+                context,
+                rp_url=rp_url,
+                allure_dir=allure_dir,
+                strategy=selected_strategy,
+                custom_instruction=custom_instruction,
+                browser_provider=browser_provider,
+                use_tui=False,
+                close_browser=False,
+                app_url=app_url,
             )
         except Exception as e:
             console.print(f"[red]Initial run error:[/red] {e}")
 
-        # Blocking watcher
-        start_watcher(target_dir, on_change)
+        # Start watcher (non-blocking)
+        observer = start_watcher(target_dir, on_change, blocking=False)
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            observer.stop()
+        finally:
+            observer.stop()
+            observer.join()
+            await browser_provider.close()
 
+    try:
+        asyncio.run(async_watch())
     except KeyboardInterrupt:
-        console.print("\n[Lens Watch] Stopping...", style="dim")
-    finally:
-        # Valid cleanup
-        console.print("[Lens Watch] Cleaning up browser resources...", style="dim")
-        asyncio.run(browser_provider.close())
+        console.print("\n[Lens Watch] Stopped.", style="dim")

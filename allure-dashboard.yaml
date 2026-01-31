@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: allure-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: allure-dashboard
+  template:
+    metadata:
+      labels:
+        app: allure-dashboard
+    spec:
+      containers:
+        - name: allure
+          image: frankescobar/allure-docker-service:latest
+          ports:
+            - containerPort: 5050
+          env:
+            - name: CHECK_RESULTS_EVERY_SECONDS
+              value: "3"
+            - name: KEEP_HISTORY
+              value: "1"
+          volumeMounts:
+            - name: results
+              mountPath: /app/allure-results
+      volumes:
+        - name: results
+          hostPath:
+            path: /mnt/c/workspace/vibecoding-platform/aether-lens/.aether/allure-results
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: allure-dashboard
+spec:
+  selector:
+    app: allure-dashboard
+  ports:
+    - protocol: TCP
+      port: 5050
+      targetPort: 5050
+  type: LoadBalancer

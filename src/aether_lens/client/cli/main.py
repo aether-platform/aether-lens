@@ -3,6 +3,7 @@ import click
 from aether_lens.client.cli.commands.init import init
 from aether_lens.client.cli.commands.loop import loop
 from aether_lens.client.cli.commands.mcp import mcp
+from aether_lens.client.cli.commands.report import report
 from aether_lens.client.cli.commands.run import run
 from aether_lens.client.cli.commands.stop import stop
 from aether_lens.client.cli.commands.watch import watch
@@ -16,6 +17,7 @@ container.wire(
         "aether_lens.client.cli.commands.run",
         "aether_lens.client.cli.commands.watch",
         "aether_lens.client.cli.commands.loop",
+        "aether_lens.client.cli.commands.report",
     ]
 )
 
@@ -34,6 +36,7 @@ cli.add_command(watch)
 cli.add_command(loop)
 cli.add_command(stop)
 cli.add_command(mcp)
+cli.add_command(report)
 
 
 def main():

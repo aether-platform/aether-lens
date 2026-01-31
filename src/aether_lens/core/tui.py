@@ -1,12 +1,22 @@
-from textual.app import App, ComposeResult
-from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
-from textual.message import Message
-from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Footer, Header, Label, Log
+try:
+    from textual.app import App, ComposeResult
+    from textual.binding import Binding
+    from textual.containers import Container, Horizontal, Vertical
+    from textual.message import Message
+    from textual.screen import ModalScreen
+    from textual.widgets import Button, DataTable, Footer, Header, Label, Log
+except ImportError:
+    # Allow import for type checking, but runtime will fail if used
+    App = object
+    ComposeResult = None
+    Binding = None
+    Container = Horizontal = Vertical = None
+    Message = object
+    ModalScreen = object
+    Button = DataTable = Footer = Header = Label = Log = None
 
 
-class BrowserConfirmModal(ModalScreen[bool]):
+class BrowserConfirmModal(ModalScreen):
     """Modal screen for browser launch confirmation."""
 
     def __init__(self, question: str = "Launch local browser?") -> None:
@@ -95,6 +105,11 @@ class PipelineDashboard(App):
             with Vertical(id="log-container"):
                 yield Label("[bold]Execution Logs[/bold]")
                 yield Log(id="execution-log")
+        yield Label(
+            " [bold blue]Dashboard:[/bold blue] [underline]http://localhost:5050[/underline] (Allure Docker Service)\n"
+            " [dim]Note: TUI shows latest history (auto-scroll). Refer to Allure for full persistent logs.[/dim]",
+            id="allure-url",
+        )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -145,4 +160,20 @@ class PipelineDashboard(App):
                         table.update_cell(row_key, cols[col_idx].key, val)
 
     def log_message(self, message: str):
-        self.query_one(Log).write_line(message)
+        try:
+            log_widget = self.query_one("#execution-log", Log)
+            log_widget.write_line(message)
+        except Exception:
+            pass  # Fallback or ignore if TUI isn't ready
+
+    def show_completion_message(self):
+        """Show clear completion instruction."""
+        try:
+            log_widget = self.query_one("#execution-log", Log)
+            log_widget.write_line("")
+            log_widget.write_line("=" * 40)
+            log_widget.write_line("Pipeline Execution Completed.")
+            log_widget.write_line("Press 'q' to exit.")
+            log_widget.write_line("=" * 40)
+        except Exception:
+            pass
