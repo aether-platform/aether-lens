@@ -16,7 +16,7 @@ spec:
       containers:
         # 1. Main Container: Aether Lens Agent
         - name: aether-lens
-          image: localhost:5001/aether-lens:v1
+          image: localhost:5001/aether-lens:v5
           imagePullPolicy: IfNotPresent
           args: ["/app/project", "--watch"]
           env:

@@ -11,7 +11,16 @@ class LensLoopHandler(FileSystemEventHandler):
         self.last_triggered = 0
         self.debounce_seconds = 2
 
-    def on_modified(self, event):
+    def on_any_event(self, event):
+        if event.is_directory:
+            return
+
+        if event.event_type not in ["created", "modified", "deleted", "moved"]:
+            return
+
+        self._process(event)
+
+    def _process(self, event):
         if event.is_directory:
             return
 
@@ -29,12 +38,16 @@ class LensLoopHandler(FileSystemEventHandler):
             self.on_change_callback(event.src_path)
 
 
-def start_watcher(target_dir, callback):
+def start_watcher(target_dir, callback, blocking=True):
     event_handler = LensLoopHandler(target_dir, callback)
     observer = Observer()
     observer.schedule(event_handler, target_dir, recursive=True)
     observer.start()
     print(f"[Lens Loop] Watching {target_dir} for changes...")
+
+    if not blocking:
+        return observer
+
     try:
         while True:
             time.sleep(1)

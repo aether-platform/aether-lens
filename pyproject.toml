@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -14,10 +14,14 @@ dependencies = [
     "playwright",
     "reportportal-client",
     "allure-python-commons",
+    "dependency-injector",
+    "rich",
+    "mcp",
+    "fastmcp",
 ]
 
 [project.scripts]
-aether-lens = "aether_lens.entrypoint:main"
+aether-lens = "aether_lens.client.cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
