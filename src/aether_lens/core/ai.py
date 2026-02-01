@@ -67,40 +67,51 @@ def run_analysis(
         f"DEBUG: Using prompt for context: {context}, strategy: {strategy}\n"
     )
 
-    response = {
-        "change_type": "Frontend",
-        "analysis": f"Aether Lens Docs 解析: {len(diff_text)} bytes の変更を検出。VTI コンセプトに基づき、ビジュアル回帰およびビルド整合性を検証します。",
-        "recommended_tests": [
-            {
-                "type": "visual",
-                "label": "Desktop Home (Aesthetics)",
-                "browser": "chromium",
-                "viewport": "1280x720",
-                "path": "/",
-            },
-            {
-                "type": "visual",
-                "label": "Tablet Home (Medium)",
-                "browser": "chromium",
-                "viewport": "768x1024",
-                "path": "/",
-            },
-            {
-                "type": "visual",
-                "label": "Mobile Home (Responsive)",
-                "browser": "chromium",
-                "viewport": "375x667",
-                "path": "/",
-            },
-            {
-                "type": "command",
-                "label": "Production Build & Link Check",
-                "command": "npm run build",
-            },
-        ],
-        "reasoning": "ブランドサイトとしての整合性を守るため、主要な Hero セクションのマルチデバイス表示と、ドキュメントのビルド健全性を優先して推奨します。",
+    analysis_text = f"Aether Lens Docs 解析: {len(diff_text)} bytes の変更を検出。VTI コンセプトに基づき、ビルド健全性を検証します。"
+    recommended_tests = []
+
+    if strategy != "backend":
+        analysis_text += " UI への影響を考慮し、ビジュアル回帰テストを推奨します。"
+        recommended_tests.extend(
+            [
+                {
+                    "type": "visual",
+                    "label": "Desktop Home (Aesthetics)",
+                    "browser": "chromium",
+                    "viewport": "1280x720",
+                    "path": "/",
+                },
+                {
+                    "type": "visual",
+                    "label": "Tablet Home (Medium)",
+                    "browser": "chromium",
+                    "viewport": "768x1024",
+                    "path": "/",
+                },
+                {
+                    "type": "visual",
+                    "label": "Mobile Home (Responsive)",
+                    "browser": "chromium",
+                    "viewport": "375x667",
+                    "path": "/",
+                },
+            ]
+        )
+
+    recommended_tests.append(
+        {
+            "type": "command",
+            "label": "Production Build & Link Check",
+            "command": "npm run build",
+        }
+    )
+
+    return {
+        "change_type": "Frontend" if strategy != "backend" else "Backend",
+        "analysis": analysis_text,
+        "recommended_tests": recommended_tests,
+        "reasoning": "プロジェクトの整合性を守るため、推奨されるテストセットを選択しました。",
     }
-    return response
 
 
 def main():

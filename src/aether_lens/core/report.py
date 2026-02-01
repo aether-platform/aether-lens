@@ -195,9 +195,9 @@ def export_to_allure(results, target_dir):
         allure_result = {
             "uuid": test_uuid,
             "historyId": history_id,
-            "fullName": f"{res['strategy']}.{res['label']}",
+            "fullName": f"{res.get('strategy', 'unknown')}.{res['label']}",
             "labels": [
-                {"name": "suite", "value": res["strategy"]},
+                {"name": "suite", "value": res.get("strategy", "unknown")},
                 {"name": "testClass", "value": res["type"]},
                 {"name": "framework", "value": "aether-lens"},
             ],
@@ -380,3 +380,69 @@ class KubernetesAllureProvider:
                 capture_output=True,
             )
             self.pod_name = None
+
+
+class DockerAllureProvider:
+    """Handles Allure Dashboard lifecycle in Docker."""
+
+    def __init__(self, port=5050):
+        self.port = port
+        self.container_name = "aether-allure-dash"
+        self.endpoint_url = f"http://localhost:{port}"
+
+    async def start(self):
+        import docker
+
+        console.print(
+            f" -> [Allure] Ensuring Allure Dashboard (Docker) on port {self.port}...",
+            style="dim",
+        )
+        try:
+            client = docker.from_env()
+
+            # Check if container exists
+            try:
+                container = client.containers.get(self.container_name)
+                if container.status == "running":
+                    console.print(
+                        f" -> [Allure] Dashboard already running at {self.endpoint_url}",
+                        style="dim",
+                    )
+                    return self.endpoint_url
+
+                # Exists but stopped
+                container.start()
+                console.print(
+                    f" -> [Allure] Dashboard started at {self.endpoint_url}",
+                    style="dim",
+                )
+                return self.endpoint_url
+
+            except docker.errors.NotFound:
+                # Create new
+                client.containers.run(
+                    "frankescobar/allure-docker-service:latest",
+                    name=self.container_name,
+                    detach=True,
+                    ports={"5050/tcp": self.port},
+                    environment={
+                        "CHECK_RESULTS_EVERY_SECONDS": "3",
+                        "KEEP_HISTORY": "1",
+                    },
+                )
+                console.print(
+                    f" -> [Allure] Dashboard created and started at {self.endpoint_url}",
+                    style="dim",
+                )
+                return self.endpoint_url
+
+        except Exception as e:
+            console.print(
+                f"[yellow]Warning: Docker Allure launch failed: {e}. Reporting might be local-only.[/yellow]"
+            )
+            return None
+
+    async def stop(self):
+        # We might not want to kill it every time to keep history,
+        # but providing the method for completeness.
+        pass

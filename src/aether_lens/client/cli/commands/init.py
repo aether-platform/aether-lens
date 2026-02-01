@@ -1,4 +1,3 @@
-import json
 import os
 
 import click
@@ -119,25 +118,20 @@ def init(target_dir):
             deployment_config["kubernetes"] = deploy_conf
             deployment_config["inpod"] = deploy_conf
 
-    default_config = {
+    # Write config
+    from aether_lens.core.services.init_service import InitService
+
+    service = InitService()
+
+    config = {
         "strategy": analysis_strategy,
         "custom_instruction": custom_instruction,
         "browser_strategy": browser_strategy,
         "allure_strategy": allure_strategy,
         "allure_endpoint": allure_endpoint,
-        "allure_project_id": locals().get("allure_project_id", "default"),
+        "allure_project_id": allure_project_id,
         "deployment": deployment_config,
-        "tests": [
-            {
-                "type": "command",
-                "label": "Lint Check",
-                "command": "npm run lint || echo 'Lint skipped'",
-            }
-        ],
-        "dev_loop": {"browser_targets": ["desktop", "mobile"], "debounce_seconds": 2},
     }
 
-    with open(config_path, "w") as f:
-        json.dump(default_config, f, indent=2)
-
+    config_path = service.generate_default_config(target_dir, **config)
     console.print(f"[bold green]Successfully generated:[/bold green] {config_path}")

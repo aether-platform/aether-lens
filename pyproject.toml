@@ -19,17 +19,17 @@ dependencies = [
     "rich",
     "mcp",
     "fastmcp",
-    "python-socketio[client]>=5.16.0",
-    "socksio>=1.0.0",
     "Pillow",
-    "pil",
+    "textual",
 ]
 
 [project.optional-dependencies]
 browser = [
     "playwright",
-    "textual",
     "pixelmatch",
+]
+socks=[
+    "socksio>=1.0.0",
 ]
 
 [project.scripts]

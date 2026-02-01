@@ -3,15 +3,17 @@ import os
 from fastmcp import FastMCP
 
 from aether_lens.core.containers import Container
-from aether_lens.core.pipeline import run_pipeline
 from aether_lens.daemon.loop_daemon import run_loop_daemon
 
 # Initialize and wire container for MCP process
 container = Container()
+container.config.from_dict({"browser_strategy": "local", "headless": True})
 container.wire(
     modules=[
         "aether_lens.core.pipeline",
         "aether_lens.daemon.loop_daemon",
+        "aether_lens.core.services.execution_service",
+        "aether_lens.core.services.check_service",
     ]
 )
 
@@ -19,7 +21,7 @@ mcp = FastMCP("Aether Lens")
 
 
 @mcp.tool()
-def init_lens(
+async def init_lens(
     target_dir: str = ".",
     strategy: str = "auto",
     browser_strategy: str = "local",
@@ -74,7 +76,7 @@ def get_vibe_insight(target_dir: str = ".", strategy: str = "auto"):
 
 
 @mcp.tool()
-def run_lens_test(
+async def run_lens_test(
     target_dir: str = ".",
     strategy: str = "auto",
     browser_strategy: str = "local",
@@ -88,25 +90,15 @@ def run_lens_test(
     :param browser_strategy: local, docker, or inpod.
     :param browser_url: Optional CDP URL for docker/inpod.
     """
-    # The original run_pipeline import is at the top of the file,
-    # but the instruction snippet includes it here.
-    # Keeping the original top-level import and removing this redundant one.
-    # from aether_lens.core.pipeline import run_pipeline
+    execution_service = container.execution_service()
 
-    # Resolve default URL if not provided
-    if not browser_url:
-        if browser_strategy == "docker":
-            browser_url = "ws://localhost:9222"
-        elif browser_strategy == "inpod":
-            # os is already imported at top
-            browser_url = os.getenv("TEST_RUNNER_URL", "ws://aether-lens-sidecar:9222")
-
-    container.config.browser_strategy.from_value(browser_strategy)
-    container.config.browser_url.from_value(browser_url)
-
-    import asyncio
-
-    results = asyncio.run(run_pipeline(target_dir=target_dir, strategy=strategy))
+    # Note: ExecutionService handles container config internally
+    results = await execution_service.run_once(
+        target_dir=target_dir,
+        strategy=strategy,
+        browser_strategy=browser_strategy,
+        browser_url=browser_url,
+    )
     return results
 
 
@@ -165,12 +157,9 @@ def check_prerequisites(target_dir: str = "."):
 
     :param target_dir: The directory to check.
     """
-    from aether_lens.client.cli.commands.check import check_prerequisites as check_logic
-
-    # We suppress verbose console output for MCP return value,
-    # but the function currently prints to stderr.
-    # We'll rely on the returned dict.
-    results = check_logic(target_dir, verbose=False)
+    check_service = container.check_service()
+    check_service.verbose = True
+    results = check_service.check_prerequisites(target_dir)
 
     if results["valid"]:
         return f"Checks Passed: {results}"

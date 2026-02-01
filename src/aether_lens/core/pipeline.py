@@ -21,8 +21,18 @@ except ImportError:
 from aether_lens.core import browser, report
 from aether_lens.core.ai import run_analysis
 from aether_lens.core.containers import Container
+from aether_lens.core.events import CallbackTransport, EventEmitter
+from aether_lens.core.models import (
+    PipelineLogEvent,
+    TestFinishedEvent,
+    TestProgressEvent,
+    TestStartedEvent,
+)
 
 console = Console(stderr=True)
+
+
+# EventEmitter moved to .events for abstraction
 
 
 def load_config(target_dir):
@@ -275,7 +285,7 @@ async def execute_test_internal(
     target_dir,
     rp_service,
     strategy,
-    update_callback=None,
+    event_emitter: EventEmitter = None,
     app_url="http://localhost:4321",
 ):
     test_type = test.get("type", "visual")
@@ -283,37 +293,57 @@ async def execute_test_internal(
     vp = test.get("viewport")
     path_or_cmd = test.get("path") or test.get("command")
 
-    if update_callback:
-        update_callback(
-            label,
-            strategy=f"[blue]{strategy}[/blue]",
-            browser_check="[green]OK[/green]"
-            if test_type == "visual"
-            else "[dim]-[/dim]",
-            connection="[green]OK[/green]" if test_type == "visual" else "[dim]-[/dim]",
-            test_status="[cyan]実行中...[/cyan]",
+    if event_emitter:
+        event_emitter.emit(
+            TestStartedEvent(
+                type="test_started",
+                timestamp=time.time(),
+                label=label,
+                test_type=test_type,
+                strategy=strategy,
+            )
         )
 
+    baseline_path = None
     if test_type == "visual":
         if not browser_instance:
             success, error, artifact = (False, "Browser not available", None)
         else:
-            success, error, artifact, baseline_path = await run_visual_test(
+            success, error, artifact, bp = await run_visual_test(
                 vp,
                 path_url=path_or_cmd,
                 base_url=app_url,
                 browser_instance=browser_instance,
-                update_callback=update_callback,
+                update_callback=lambda lbl, **kw: event_emitter.emit(
+                    TestProgressEvent(
+                        type="test_progress",
+                        timestamp=time.time(),
+                        label=lbl,
+                        status_text=kw.get("test_status", ""),
+                    )
+                )
+                if event_emitter
+                else None,
                 test_id_key=label,
                 target_dir=target_dir,
             )
+            baseline_path = bp
     elif test_type == "command":
         # Handle ENOENT or missing npm by ensuring we run in shell (already doing)
         # But maybe we should log CWD for clarity
         success, error, artifact = await run_command_test(
             path_or_cmd,
             cwd=target_dir,
-            update_callback=update_callback,
+            update_callback=lambda lbl, **kw: event_emitter.emit(
+                TestProgressEvent(
+                    type="test_progress",
+                    timestamp=time.time(),
+                    label=lbl,
+                    status_text=kw.get("test_status", ""),
+                )
+            )
+            if event_emitter
+            else None,
             test_id_key=label,
         )
         baseline_path = None
@@ -322,12 +352,18 @@ async def execute_test_internal(
         baseline_path = None
 
     status = "PASSED" if success else "FAILED"
-    status_color = "bold green" if success else "bold red"
 
-    if update_callback:
-        update_callback(
-            label,
-            test_status=f"[{status_color}]{status}[/{status_color}]",
+    if event_emitter:
+        event_emitter.emit(
+            TestFinishedEvent(
+                type="test_finished",
+                timestamp=time.time(),
+                label=label,
+                status=status,
+                error=error,
+                artifact=artifact,
+                baseline=baseline_path,
+            )
         )
 
     if rp_service:
@@ -360,6 +396,7 @@ async def _run_headless(
     rp_service,
     close_browser=True,
     app_url="http://localhost:4321",
+    event_emitter: EventEmitter = None,
 ):
     """Executes tests without TUI, handling optional browser dependencies."""
     results = []
@@ -375,8 +412,11 @@ async def _run_headless(
             async with async_playwright() as p:
                 browser_instance = None
                 try:
-                    # Non-interactive start
-                    await browser_provider.start(p, display_callback=None)
+                    # Non-interactive start: auto-confirm browser launch in headless mode
+                    async def auto_confirm(q, default=True):
+                        return True
+
+                    await browser_provider.start(p, display_callback=auto_confirm)
                     browser_instance = await browser_provider.get_browser(p)
                 except Exception as e:
                     console.print(f"[red]Browser setup failed:[/red] {e}")
@@ -389,7 +429,7 @@ async def _run_headless(
                             target_dir,
                             rp_service,
                             strategy,
-                            update_callback=None,
+                            event_emitter=event_emitter,
                             app_url=app_url,
                         )
                     )
@@ -400,12 +440,22 @@ async def _run_headless(
                     await browser_provider.close()
 
         except ImportError:
-            console.print("[red]Playwright not installed. Skipping visual tests.[/red]")
+            console.print("[red]Playwright is not installed.[/red]")
+            console.print("[yellow]Visual tests require the 'browser' extra.[/yellow]")
+            console.print(
+                "[blue]Please install it with: pip install 'aether-lens-cli\\[browser]'[/blue]\n"
+            )
+            console.print("[dim]Skipping visual tests for now...[/dim]")
             # Skip visual tests, run others
             for test in tests:
                 if test.get("type") == "visual":
                     results.append(
-                        {**test, "status": "SKIPPED", "error": "Playwright missing"}
+                        {
+                            **test,
+                            "status": "SKIPPED",
+                            "error": "Playwright missing",
+                            "strategy": strategy,
+                        }
                     )
                 else:
                     test_tasks.append(
@@ -415,7 +465,7 @@ async def _run_headless(
                             target_dir,
                             rp_service,
                             strategy,
-                            update_callback=None,
+                            event_emitter=event_emitter,
                             app_url=app_url,
                         )
                     )
@@ -431,7 +481,7 @@ async def _run_headless(
                     target_dir,
                     rp_service,
                     strategy,
-                    update_callback=None,
+                    event_emitter=event_emitter,
                     app_url=app_url,
                 )
             )
@@ -446,95 +496,179 @@ async def run_pipeline_with_tui(
     strategy,
     target_dir,
     rp_service,
+    event_emitter: EventEmitter = None,
     close_browser=True,
     app_url="http://localhost:4321",
+    config=None,
 ):
     """Executes the pipeline within the Textual TUI."""
     # This import is guarded in run_pipeline, so it should be safe here if we passed checks
     from aether_lens.core.tui import PipelineDashboard
 
     # Check for playwright before starting TUI if we have visual tests
-    has_visual = any(t.get("type") == "visual" for t in tests)
-    if has_visual:
-        try:
-            import playwright
-        except ImportError:
-            # Should not happen if caller checked, but just in case
-            raise ImportError("Playwright is required for visual tests in TUI mode.")
-
     app = PipelineDashboard(tests, strategy_name=strategy)
 
-    async def run_logic():
-        # Wait for app to be ready
-        while not app.is_mounted:
-            await asyncio.sleep(0.1)
-
+    async def run_logic(app_instance):
+        has_visual = any(t.get("type") == "visual" for t in tests)
         browser_instance = None
-        app.log_message(f"Run Logic started. Has Visual: {has_visual}")
 
-        if has_visual:
-            app.log_message("Starting Playwright...")
+        # Allure Lifecycle
+        allure_provider = None
+        allure_strategy = config.get("allure_strategy") if config else None
+        if allure_strategy == "docker":
+            allure_provider = report.DockerAllureProvider()
+        elif allure_strategy in ["kubernetes", "inpod"]:
+            allure_provider = report.KubernetesAllureProvider()
+        elif allure_strategy == "ephemeral":
+            # Auto-detect or default to Docker if local
+            allure_provider = report.DockerAllureProvider()
+
+        if allure_provider:
             try:
-                from playwright.async_api import async_playwright
+                await allure_provider.start()
+            except Exception as e:
+                app_instance.log_message(f"[yellow]Allure start failed: {e}[/yellow]")
 
-                async with async_playwright() as p:
-                    try:
-                        # Provide modal confirmation callback to the provider
-                        await browser_provider.start(
-                            p, display_callback=app.ask_browser_confirmation
+        app_instance.log_message(f"Run Logic started. Has Visual: {has_visual}")
+
+        # Create a proxy event emitter that updates the TUI
+        # This allows the same pipeline code to work for both TUI and external Executor
+        tui_emitter = event_emitter or EventEmitter(
+            transports=[
+                CallbackTransport(
+                    callback=lambda ev: (
+                        app.update_test_status(
+                            ev.label,
+                            test_status=ev.status
+                            if hasattr(ev, "status")
+                            else ev.status_text
+                            if hasattr(ev, "status_text")
+                            else "",
                         )
-                        browser_instance = await browser_provider.get_browser(p)
-                        app.log_message("Browser started successfully.")
-                    except Exception as e:
-                        app.log_message(f"Browser setup failed: {e}")
+                        if isinstance(
+                            ev, (TestStartedEvent, TestProgressEvent, TestFinishedEvent)
+                        )
+                        else app.log_message(ev.message)
+                        if isinstance(ev, PipelineLogEvent)
+                        else None
+                    )
+                )
+            ]
+        )
 
-                    test_tasks = []
-                    for test in tests:
-                        test_tasks.append(
-                            execute_test_internal(
-                                test,
-                                browser_instance,
-                                target_dir,
-                                rp_service,
-                                strategy,
-                                update_callback=app.update_test_status,
-                                app_url=app_url,
+        # Prepare Browser Context Manager (Sub-workflow)
+
+        async def execute_all_tests():
+            # Separate setup tasks and normal tests
+            setup_tasks = [t for t in tests if t.get("type") == "setup"]
+            normal_tests = [t for t in tests if t.get("type") != "setup"]
+
+            # Execute Setup Tasks First
+            browser_instance = None
+
+            for setup_task in setup_tasks:
+                if setup_task.get("label") == "Prepare Browser Environment":
+                    # Notify status
+                    if tui_emitter:
+                        tui_emitter.emit(
+                            TestStartedEvent(
+                                type="test_started",
+                                timestamp=time.time(),
+                                label=setup_task["label"],
                             )
                         )
 
-                    results = await asyncio.gather(*test_tasks)
-                    return results
+            # Refactored Logic: Context Manager around execution
+            if has_visual:
+                try:
+                    from playwright.async_api import async_playwright
 
-            finally:
-                # Ensure browser is closed even if cancellations or errors occur
-                if close_browser:
-                    await browser_provider.close()
-                    app.log_message("Browser resource closed.")
-                app.show_completion_message()
-        else:
-            # Command only tests
-            test_tasks = []
-            for test in tests:
-                test_tasks.append(
-                    execute_test_internal(
-                        test,
-                        None,
-                        target_dir,
-                        rp_service,
-                        strategy,
-                        update_callback=app.update_test_status,
-                        app_url=app_url,
+                    async with async_playwright() as p:
+                        # Run Setup Task "Visually"
+                        for t in setup_tasks:
+                            if t.get("label") == "Prepare Browser Environment":
+                                try:
+                                    await browser_provider.start(
+                                        p, display_callback=app.ask_browser_confirmation
+                                    )
+                                    browser_instance = (
+                                        await browser_provider.get_browser(p)
+                                    )
+                                    app.log_message("Browser started successfully.")
+                                    if tui_emitter:
+                                        tui_emitter.emit(
+                                            TestFinishedEvent(
+                                                type="test_finished",
+                                                timestamp=time.time(),
+                                                label=t["label"],
+                                                status="PASSED",
+                                            )
+                                        )
+                                except Exception as e:
+                                    app.log_message(f"Browser setup failed: {e}")
+                                    if tui_emitter:
+                                        tui_emitter.emit(
+                                            TestFinishedEvent(
+                                                type="test_finished",
+                                                timestamp=time.time(),
+                                                label=t["label"],
+                                                status="FAILED",
+                                                error=str(e),
+                                            )
+                                        )
+                                    browser_instance = None
+
+                        # Run Normal Tests
+                        tasks = []
+                        for test in normal_tests:
+                            tasks.append(
+                                execute_test_internal(
+                                    test,
+                                    browser_instance,
+                                    target_dir,
+                                    rp_service,
+                                    strategy,
+                                    event_emitter=tui_emitter,
+                                    app_url=app_url,
+                                )
+                            )
+                        return await asyncio.gather(*tasks)
+
+                finally:
+                    if close_browser:
+                        await browser_provider.close()
+                        app_instance.log_message("Browser resource closed.")
+            else:
+                # No visual tests
+                tasks = []
+                for test in tests:
+                    if test.get("type") == "setup":
+                        continue
+                    tasks.append(
+                        execute_test_internal(
+                            test,
+                            None,
+                            target_dir,
+                            rp_service,
+                            strategy,
+                            event_emitter=tui_emitter,
+                            app_url=app_url,
+                        )
                     )
-                )
-            results = await asyncio.gather(*test_tasks)
-            app.show_completion_message()
-            return results
+                return await asyncio.gather(*tasks)
+
+        results = await execute_all_tests()
+        app_instance.results = results
+        app_instance.show_completion_message()
+        return results
 
     # Run the TUI and logic concurrently
     app.log_message("Starting run_pipeline_with_tui dashboard loop...")
-    logic_task = asyncio.create_task(run_logic())
+    app.run_logic_callback = run_logic
     await app.run_async()
-    return await logic_task
+    # Note: Textual's run_async returns None.
+    # The results are collected via capturing if needed, but here we just wait for completion.
+    return getattr(app, "results", [])
 
 
 @inject
@@ -548,6 +682,7 @@ async def run_pipeline(
     custom_instruction=None,
     browser_provider: "browser.BrowserProvider" = Provide[Container.browser_provider],
     use_tui: bool = True,
+    event_emitter: EventEmitter = None,
     close_browser: bool = True,
     app_url: str = None,
 ):
@@ -664,6 +799,14 @@ async def run_pipeline(
                 all_tests.append(t)
                 seen_tests.add(test_key)
 
+    # Merge with explicit tests from config
+    config_tests = config.get("tests", [])
+    for t in config_tests:
+        test_key = (t.get("type"), t.get("label"), t.get("path"), t.get("command"))
+        if test_key not in seen_tests:
+            all_tests.append(t)
+            seen_tests.add(test_key)
+
     if not all_tests:
         console.print(
             "[yellow]No tests recommended for the selected strategies.[/yellow]"
@@ -681,6 +824,19 @@ async def run_pipeline(
     )
 
     tests = all_tests
+
+    # Check if visual tests exist and prepend Browser Setup task
+    has_visual_tests = any(t.get("type") == "visual" for t in tests)
+    if has_visual_tests:
+        tests.insert(
+            0,
+            {
+                "type": "setup",
+                "label": "Prepare Browser Environment",
+                "status": "PENDING",
+            },
+        )
+
     rp_service = None  # ReportPortal setup simplified
 
     # Resolve app URL
@@ -704,22 +860,33 @@ async def run_pipeline(
 
     # Try importing Textual if TUI is requested
     if can_use_tui:
-        console.print(" -> [Pipeline] Launching Textual TUI...")
         try:
             import textual
 
+            console.print(" -> [Pipeline] Launching Textual TUI...")
+        except ImportError:
+            console.print(
+                "[yellow]Textual not installed. Falling back to plain reporting.[/yellow]"
+            )
+            can_use_tui = False
+
+    if can_use_tui:
+        try:
             results = await run_pipeline_with_tui(
                 tests,
                 browser_provider,
                 strategy,
                 target_dir,
                 rp_service,
+                event_emitter=event_emitter,
                 close_browser=close_browser,
                 app_url=app_url,
+                config=config,
             )
-        except ImportError:
+        except ImportError as e:
+            # specifically for playwright in TUI
             console.print(
-                "[yellow]Textual not installed or TUI disabled. Falling back to plain reporting.[/yellow]"
+                f"[yellow]TUI dependency missing: {e}. Falling back to plain reporting.[/yellow]"
             )
             can_use_tui = False
         except Exception as e:
@@ -727,6 +894,8 @@ async def run_pipeline(
             console.print(
                 f"[yellow]TUI Error: {e}. Falling back to plain reporting.[/yellow]"
             )
+            # Use a more descriptive error if it's a known one
+            # traceback.print_exc() # For deep debugging
             can_use_tui = False
 
     if not can_use_tui:
@@ -741,6 +910,7 @@ async def run_pipeline(
             rp_service,
             close_browser=close_browser,
             app_url=app_url,
+            event_emitter=event_emitter,
         )
 
     # Final summary (Plain table)
@@ -795,12 +965,21 @@ async def run_pipeline(
     try:
         html_path = report.generate_conformance_report(results, target_dir)
         allure_path = report.export_to_allure(results, target_dir)
+
+        # Get Allure Config for URL display
+        allure_endpoint = os.getenv("ALLURE_ENDPOINT") or "http://localhost:5050"
+        allure_project_id = os.getenv("ALLURE_PROJECT_ID", "default")
+        allure_ui_url = f"{allure_endpoint.rstrip('/')}/allure-docker-service/projects/{allure_project_id}/reports/latest/index.html"
+
         console.print("\n -> [Pipeline] [bold green]Report generated![/bold green]")
         console.print(
             f"    - Visual Conformance: [link=file://{html_path}]{html_path}[/link]"
         )
         console.print(
-            "    - Allure Dashboard: [bold cyan]http://localhost:5050[/bold cyan] (Real-time)"
+            f"    - Allure Dashboard UI: [bold cyan]{allure_ui_url}[/bold cyan]"
+        )
+        console.print(
+            f"    - Allure Dashboard API: [dim]{allure_endpoint}[/dim]", style="dim"
         )
         console.print(f"    - Allure Results Raw: {allure_path}", style="dim")
 

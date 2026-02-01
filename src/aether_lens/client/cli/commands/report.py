@@ -1,6 +1,4 @@
 import os
-import webbrowser
-from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
 import click
@@ -17,24 +15,25 @@ def report():
 @click.option("--allure", is_flag=True, help="Open the real-time Allure dashboard.")
 def open(target_dir, allure):
     """Open test reports in your browser."""
+    from aether_lens.core.services.report_service import ReportService
+
+    service = ReportService()
+
     if allure:
-        url = "http://localhost:5050"
+        url = service.open_report(use_allure=True)
         click.echo(f"Opening Allure Dashboard: {url}")
         click.echo(
             "(Make sure you have run: kubectl port-forward svc/allure-dashboard 5050:5050)"
         )
-        webbrowser.open(url)
         return
 
-    report_path = Path(target_dir) / ".aether" / "report.html"
-    if not report_path.exists():
-        click.secho(f"Error: Report not found at {report_path}", fg="red")
+    path = service.open_report(target_dir=target_dir)
+    if not path:
+        click.secho(f"Error: Report not found in {target_dir}/.aether", fg="red")
         click.echo("Run 'aether-lens run' first to generate a report.")
         return
 
-    abs_path = report_path.absolute()
-    click.echo(f"Opening report: {abs_path}")
-    webbrowser.open(f"file://{abs_path}")
+    click.echo(f"Opening report: {path}")
 
 
 @report.command()
@@ -42,24 +41,38 @@ def open(target_dir, allure):
 @click.option("--port", default=43210, help="Port to serve the report on.")
 def serve(target_dir, port):
     """Serve the report directory via HTTP."""
-    report_dir = Path(target_dir) / ".aether"
-    if not report_dir.exists():
-        click.secho(f"Error: .aether directory not found in {target_dir}", fg="red")
-        return
-
-    os.chdir(report_dir)
-    server_address = ("", port)
-    httpd = HTTPServer(server_address, SimpleHTTPRequestHandler)
-
-    click.secho("Aether Lens Conformance UI serving at:", fg="blue", bold=True)
-    click.secho(f"http://localhost:{port}/report.html", fg="cyan", underline=True)
-    click.echo("\nPress Ctrl+C to stop.")
 
     try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        click.echo("\nStopping server...")
-        httpd.server_close()
+        # We need to handle the serve loop here since it's interactive
+        report_dir = Path(target_dir) / ".aether"
+        if not report_dir.exists():
+            click.secho(f"Error: .aether directory not found in {target_dir}", fg="red")
+            return
+
+        old_dir = os.getcwd()
+        os.chdir(report_dir)
+
+        import http.server
+
+        server_address = ("", port)
+        httpd = http.server.HTTPServer(
+            server_address, http.server.SimpleHTTPRequestHandler
+        )
+
+        click.secho("Aether Lens Conformance UI serving at:", fg="blue", bold=True)
+        click.secho(f"http://localhost:{port}/report.html", fg="cyan", underline=True)
+        click.echo("\nPress Ctrl+C to stop.")
+
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            click.echo("\nStopping server...")
+            httpd.server_close()
+        finally:
+            os.chdir(old_dir)
+
+    except Exception as e:
+        click.secho(f"Error: {e}", fg="red")
 
 
 @report.command()

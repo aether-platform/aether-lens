@@ -1,18 +1,16 @@
 import os
-import sys
 
 import click
 from rich.console import Console
-
-from aether_lens.daemon.loop_daemon import run_loop_daemon
 
 console = Console(stderr=True)
 
 
 @click.command()
-@click.argument("target", required=False, default=".")
-@click.option("--pod", help="Target Pod name")
+@click.argument("target_dir", default=".")
+@click.argument("pod_name", required=False)
 @click.option("--namespace", default="aether-system", help="Target Namespace")
+@click.option("--remote-path", default="/app/project", help="Remote sync path")
 @click.option(
     "--browser-strategy",
     type=click.Choice(["local", "docker", "inpod"]),
@@ -20,9 +18,10 @@ console = Console(stderr=True)
     help="Browser execution strategy",
 )
 @click.option("--browser-url", help="CDP URL for docker/inpod strategy")
-def loop(target, pod, namespace, browser_strategy, browser_url):
-    """Local development loop: sync changes to remote Pod and trigger analysis."""
+def loop(target_dir, pod_name, namespace, remote_path, browser_strategy, browser_url):
+    """Start a heavy development loop (Sync & Remote Test)."""
     from aether_lens.client.cli.main import container
+    from aether_lens.core.services.daemon_service import DaemonService
 
     # Resolve default URL if not provided
     if not browser_url:
@@ -34,12 +33,17 @@ def loop(target, pod, namespace, browser_strategy, browser_url):
     container.config.browser_strategy.from_value(browser_strategy)
     container.config.browser_url.from_value(browser_url)
 
-    pod_name = pod or os.getenv("LENS_POD_NAME")
     if not pod_name:
-        console.print(
-            "[bold red][Error] 'loop' command requires --pod or LENS_POD_NAME env var.[/bold red]"
-        )
-        sys.exit(1)
+        console.print("[red]Error: Pod name is required for loop command.[/red]")
+        return
 
-    remote_path = os.getenv("REMOTE_TARGET_DIR", "/app/project")
-    run_loop_daemon(target, pod_name, namespace, remote_path)
+    service = DaemonService()
+    service.start_loop(
+        target_dir=target_dir,
+        pod_name=pod_name,
+        namespace=namespace,
+        remote_path=remote_path,
+        blocking=True,
+        browser_strategy=browser_strategy,
+        browser_url=browser_url,
+    )

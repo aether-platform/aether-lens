@@ -186,33 +186,7 @@ class CDPBrowserProvider(BrowserProvider):
             )
             if self.launch:
                 await self.close()
-                raise e
-
-            console.print(
-                "[blue]Tip: Use --launch-browser to automatically start a container/pod.[/blue]"
-            )
-
-            # Fallback
-            confirmed = False
-            if display_callback:
-                confirmed = await display_callback(
-                    "Launch local browser as fallback?", default=True
-                )
-            elif sys.stdin.isatty():
-                confirmed = Confirm.ask(
-                    "Launch local browser as fallback?", default=True
-                )
-
-            if confirmed:
-                console.print(
-                    " -> [Browser] Switching to Local Browser strategy...", style="dim"
-                )
-                self._browser = await playwright.chromium.launch()
-                console.print(
-                    " -> [Browser] Local browser started (fallback).", style="dim"
-                )
-                return
-            raise
+            raise e
 
     async def get_browser(self, playwright):
         return await super().get_browser(playwright)

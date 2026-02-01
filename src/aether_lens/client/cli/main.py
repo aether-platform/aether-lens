@@ -1,6 +1,7 @@
 import click
 
 from aether_lens.client.cli.commands.check import check
+from aether_lens.client.cli.commands.executor import executor
 from aether_lens.client.cli.commands.init import init
 from aether_lens.client.cli.commands.loop import loop
 from aether_lens.client.cli.commands.mcp import mcp
@@ -37,6 +38,7 @@ cli.add_command(run)
 cli.add_command(check)
 cli.add_command(watch)
 cli.add_command(loop)
+cli.add_command(executor)
 cli.add_command(stop)
 cli.add_command(mcp)
 cli.add_command(report)

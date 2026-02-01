@@ -1,3 +1,6 @@
+import asyncio
+import json
+
 try:
     from textual.app import App, ComposeResult
     from textual.binding import Binding
@@ -51,6 +54,14 @@ class TestUpdate(Message):
         self.fields = fields
 
 
+class PipelineLogMessage(Message):
+    """Message to add a log entry."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self.message = message
+
+
 class PipelineDashboard(App):
     """Aether Lens Pipeline Dashboard."""
 
@@ -95,6 +106,7 @@ class PipelineDashboard(App):
         self.tests_data = tests_data
         self.strategy_name = strategy_name
         self.test_rows = {}  # Map label/id to row key
+        self.run_logic_callback = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -121,19 +133,77 @@ class PipelineDashboard(App):
 
         for i, test in enumerate(self.tests_data):
             label = test.get("label", "Unknown")
+            is_visual = test.get("type") == "visual"
+            browser_val = "Pending" if is_visual else "N/A"
+            conn_val = "Pending" if is_visual else "N/A"
+
             # Use the actual strategy name passed in
             strategy = self.strategy_name
             row_key = table.add_row(
-                str(i + 1), strategy, label, "Pending", "Pending", "Waiting", key=label
+                str(i + 1), strategy, label, browser_val, conn_val, "Waiting", key=label
             )
             self.test_rows[label] = row_key
+
+        if self.run_logic_callback:
+            asyncio.create_task(self.run_logic_callback(self))
 
     async def ask_browser_confirmation(
         self, question: str, default: bool = True
     ) -> bool:
-        """Helper to show modal from outside the event loop if needed."""
-        # This will be called from the pipeline logic
-        return await self.push_screen_wait(BrowserConfirmModal(question))
+        """Helper to show modal without blocking the event loop or requiring a worker thread."""
+        try:
+            loop = asyncio.get_running_loop()
+            future = loop.create_future()
+
+            def handle_dismiss(result: bool) -> None:
+                if not future.done():
+                    future.set_result(result)
+
+            # Use push_screen with a callback instead of push_screen_wait
+            # self.app is our PipelineDashboard instance
+            self.app.push_screen(BrowserConfirmModal(question), callback=handle_dismiss)
+
+            return await future
+        except Exception as e:
+            self.log_message(
+                f"[yellow]UI Modal Error: {e}. Falling back to default ({default}).[/yellow]"
+            )
+            return default
+
+    def handle_event(self, event_data: dict):
+        """Processes an event received from the executor."""
+        etype = event_data.get("type")
+        if etype == "test_started":
+            self.update_test_status(
+                event_data["label"],
+                strategy=event_data.get("strategy", ""),
+                test_status="実行中...",
+            )
+        elif etype == "test_progress":
+            self.update_test_status(
+                event_data["label"], test_status=event_data.get("status_text", "")
+            )
+        elif etype == "test_finished":
+            status = event_data.get("status", "UNKNOWN")
+            error = event_data.get("error")
+            status_color = "bold green" if status == "PASSED" else "bold red"
+
+            display_status = f"[{status_color}]{status}[/{status_color}]"
+            if status != "PASSED" and error:
+                # Truncate and clean error for one-line display
+                clean_err = error.replace("\n", " ").strip()
+                if len(clean_err) > 30:
+                    clean_err = clean_err[:27] + "..."
+                display_status += f" ([dim]{clean_err}[/dim])"
+
+            self.update_test_status(
+                event_data["label"],
+                test_status=display_status,
+            )
+        elif etype == "log":
+            self.log_message(event_data.get("message", ""))
+        elif etype == "result":
+            self.show_completion_message()
 
     def update_test_status(self, label: str, **kwargs):
         """Update a specific test row in the table."""
@@ -158,6 +228,40 @@ class PipelineDashboard(App):
                     col_idx = col_map[key]
                     if col_idx < len(cols):
                         table.update_cell(row_key, cols[col_idx].key, val)
+
+    async def stream_executor_events(self, executable, args):
+        """Spawns an executor process and streams its events to the dashboard."""
+        self.log_message(f"Spawning executor: {executable} {' '.join(args)}")
+
+        process = await asyncio.create_subprocess_exec(
+            executable,
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        async def read_stdout():
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                try:
+                    event = json.loads(line.decode().strip())
+                    self.handle_event(event)
+                except Exception:
+                    # Treat raw text as log
+                    self.log_message(line.decode().strip())
+
+        async def read_stderr():
+            while True:
+                line = await process.stderr.readline()
+                if not line:
+                    break
+                self.log_message(f"[red]{line.decode().strip()}[/red]")
+
+        await asyncio.gather(read_stdout(), read_stderr())
+        await process.wait()
+        self.show_completion_message()
 
     def log_message(self, message: str):
         try:
