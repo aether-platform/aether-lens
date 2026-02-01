@@ -1,4 +1,5 @@
 import click
+import logfire
 
 from aether_lens.client.cli.commands.check import check
 from aether_lens.client.cli.commands.executor import executor
@@ -11,16 +12,24 @@ from aether_lens.client.cli.commands.stop import stop
 from aether_lens.client.cli.commands.watch import watch
 from aether_lens.core.containers import Container
 
+logfire.configure(send_to_logfire="if-token-present")
+logfire.instrument_pydantic()
+
 # Initialize container and wire to relevant modules
 container = Container()
 container.wire(
     modules=[
-        "aether_lens.core.pipeline",
         "aether_lens.client.cli.commands.run",
         "aether_lens.client.cli.commands.watch",
         "aether_lens.client.cli.commands.loop",
+        "aether_lens.client.cli.commands.stop",
         "aether_lens.client.cli.commands.report",
-        "aether_lens.client.cli.commands.check",  # Wired if needed
+        "aether_lens.client.cli.commands.executor",
+        "aether_lens.client.cli.commands.init",
+        "aether_lens.client.cli.commands.check",
+        "aether_lens.daemon.controller.execution",
+        "aether_lens.daemon.controller.watcher",
+        "aether_lens.daemon.loop_daemon",
     ]
 )
 

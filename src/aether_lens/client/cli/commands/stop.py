@@ -1,18 +1,20 @@
 import click
+from dependency_injector.wiring import Provide, inject
 from rich.console import Console
+
+from aether_lens.core.containers import Container
+from aether_lens.daemon.registry import stop_loop
 
 console = Console(stderr=True)
 
 
 @click.command()
 @click.argument("target_dir", default=".")
-def stop(target_dir):
+@inject
+def stop(target_dir, registry_stop=Provide[Container.watch_service]):  # Simplified
     """Stop an active Aether Lens loop."""
-    from aether_lens.core.services.daemon_service import DaemonService
 
-    service = DaemonService()
-
-    if service.stop_loop(target_dir):
+    if stop_loop(target_dir):
         click.echo(f"Lens loop stopped for {target_dir}")
     else:
         click.echo(f"No active loop found for {target_dir}")

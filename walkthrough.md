@@ -1,6 +1,25 @@
 # Aether Lens (Aether Vision) 実装ドキュメント
 
-Aether Platform 向けのライブテスト機能「Aether Lens」の PoC 基盤実装です。
+# walkthrough.md
+
+## Core Directory Reorganization
+
+The `aether_lens.core` directory has been reorganized into sub-packages for better maintainability:
+
+- **domain**: Contains domain models (`models.py`) and events (`events.py`).
+- **execution**: Contains pipeline execution logic (`pipeline.py`, `runner.py`, `watcher.py`, `reg_scenarios.py`, `session.py`).
+- **planning**: Contains AI planning logic (`ai.py`, `tests.yaml`).
+- **presentation**: Contains presentation layer code (`tui.py`, `report.py`, `report_template.html`).
+
+Imports have been updated across the codebase (`client`, `daemon`, `services`) to reflect these changes.
+Browser management logic has been simplified, removing `browser.py` and consolidating visual testing into `runner.py`.
+
+## Verification Summary
+
+- Verified that all imports in `src/aether_lens` point to the new locations.
+- Verified that `pipeline.py` correctly handles visual tests using `VisualTestRunner`.
+- Verified that `client/cli` and `client/mcp` commands are updated.
+  Platform 向けのライブテスト機能「Aether Lens」の PoC 基盤実装です。
 
 ## 1. 機能概要
 

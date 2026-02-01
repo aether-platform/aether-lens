@@ -1,32 +1,10 @@
 from dependency_injector import containers, providers
 
-from . import browser
-
 
 class Container(containers.DeclarativeContainer):
     """DI container for core components."""
 
     config = providers.Configuration()
-
-    # Browser Provider Selector: Switch between local, docker, and inpod strategies.
-    browser_provider = providers.Selector(
-        config.browser_strategy,
-        local=providers.Factory(browser.LocalBrowserProvider, headless=config.headless),
-        docker=providers.Factory(
-            browser.CDPBrowserProvider,
-            endpoint_url=config.browser_url,
-            launch=config.launch_browser,
-        ),
-        k8s=providers.Factory(
-            browser.KubernetesBrowserProvider,
-            endpoint_url=config.browser_url,
-            launch=config.launch_browser,
-        ),
-        inpod=providers.Factory(
-            browser.CDPBrowserProvider, endpoint_url=config.browser_url, launch=False
-        ),
-        dry_run=providers.Factory(browser.LogOnlyBrowserProvider),
-    )
 
     # Services (Using Factory to avoid circular imports during class definition)
     @staticmethod
@@ -36,16 +14,33 @@ class Container(containers.DeclarativeContainer):
         return CheckService()
 
     @staticmethod
-    def _create_execution_service(config, **kwargs):
-        from .services.execution_service import ExecutionService
+    def _create_execution_controller(config, test_runner, planner, **kwargs):
+        from aether_lens.daemon.controller.execution import ExecutionController
 
-        return ExecutionService(config=config)
+        return ExecutionController(
+            config=config, test_runner=test_runner, planner=planner
+        )
 
     @staticmethod
-    def _create_watch_service(**kwargs):
-        from .services.watch_service import WatchService
+    def _create_watch_controller(execution_ctrl, **kwargs):
+        from aether_lens.daemon.controller.watcher import WatchController
 
-        return WatchService()
+        # Note: watcher might need a callback, but we can provide a default or handle it in the service/factory
+        return WatchController(
+            target_dir=None, on_change_callback=None, execution_ctrl=execution_ctrl
+        )
+
+    @staticmethod
+    def _create_test_runner(config, **kwargs):
+        from aether_lens.daemon.repository.runner import VisualTestRunner
+
+        return VisualTestRunner(base_url=None, current_dir=None)
+
+    @staticmethod
+    def _create_test_planner(**kwargs):
+        from aether_lens.core.planning.ai import TestPlanner
+
+        return TestPlanner()
 
     @staticmethod
     def _create_init_service():
@@ -59,17 +54,21 @@ class Container(containers.DeclarativeContainer):
 
         return ReportService()
 
-    @staticmethod
-    def _create_daemon_service():
-        from .services.daemon_service import DaemonService
-
-        return DaemonService()
+    # Services (Using Factory to avoid circular imports during class definition)
 
     check_service = providers.Factory(_create_check_service)
+
+    test_runner = providers.Factory(_create_test_runner, config=config.provider)
+    test_planner = providers.Factory(_create_test_planner)
+
     execution_service = providers.Factory(
-        _create_execution_service, config=config.provider
+        _create_execution_controller,
+        config=config.provider,
+        test_runner=test_runner,
+        planner=test_planner,
     )
-    watch_service = providers.Factory(_create_watch_service)
+    watch_service = providers.Factory(
+        _create_watch_controller, execution_ctrl=execution_service
+    )
     init_service = providers.Factory(_create_init_service)
     report_service = providers.Factory(_create_report_service)
-    daemon_service = providers.Factory(_create_daemon_service)

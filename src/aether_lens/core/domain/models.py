@@ -45,3 +45,17 @@ class PipelineLogEvent(PipelineEvent):
 @dataclass
 class PipelineResultEvent(PipelineEvent):
     results: List[Dict[str, Any]]
+
+
+@dataclass
+class TestCase:
+    id: str
+    type: str
+    label: str
+    command: str
+    description: Optional[str] = None
+    tags: List[str] = None
+
+    def __post_init__(self):
+        if self.tags is None:
+            self.tags = []

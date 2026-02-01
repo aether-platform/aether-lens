@@ -1,19 +1,26 @@
+import json
 import os
 
+import logfire
+from dependency_injector.wiring import Provide, inject
 from fastmcp import FastMCP
 
 from aether_lens.core.containers import Container
+from aether_lens.core.planning.ai import run_analysis
 from aether_lens.daemon.loop_daemon import run_loop_daemon
+from aether_lens.daemon.registry import stop_loop
+
+logfire.configure(send_to_logfire="if-token-present")
+logfire.instrument_pydantic()
 
 # Initialize and wire container for MCP process
 container = Container()
 container.config.from_dict({"browser_strategy": "local", "headless": True})
 container.wire(
     modules=[
-        "aether_lens.core.pipeline",
+        "aether_lens.daemon.controller.execution",
+        "aether_lens.daemon.controller.watcher",
         "aether_lens.daemon.loop_daemon",
-        "aether_lens.core.services.execution_service",
-        "aether_lens.core.services.check_service",
     ]
 )
 
@@ -24,7 +31,7 @@ mcp = FastMCP("Aether Lens")
 async def init_lens(
     target_dir: str = ".",
     strategy: str = "auto",
-    browser_strategy: str = "local",
+    browser_strategy: str = "docker",
     allure_strategy: str = "managed",
 ):
     """
@@ -49,11 +56,25 @@ async def init_lens(
     }
 
     with open(config_path, "w") as f:
-        import json
-
         json.dump(default_config, f, indent=2)
 
     return f"Successfully generated: {config_path}"
+
+
+@inject
+def _get_vibe_insight_impl(
+    target_dir: str,
+    strategy: str,
+    execution_service: Container.execution_service = Provide[
+        Container.execution_service
+    ],
+):
+    diff = execution_service.get_git_diff(target_dir)
+    if not diff:
+        return "No changes detected."
+
+    analysis = run_analysis(diff, context="mcp-agent", strategy=strategy)
+    return analysis
 
 
 @mcp.tool()
@@ -64,42 +85,36 @@ def get_vibe_insight(target_dir: str = ".", strategy: str = "auto"):
     :param target_dir: The directory to analyze.
     :param strategy: Analysis strategy to use.
     """
-    from aether_lens.core.ai import run_analysis
-    from aether_lens.core.pipeline import get_git_diff
+    return _get_vibe_insight_impl(target_dir, strategy)
 
-    diff = get_git_diff(target_dir)
-    if not diff:
-        return "No changes detected."
 
-    analysis = run_analysis(diff, context="mcp-agent", strategy=strategy)
-    return analysis
+@inject
+async def _run_pipeline_impl(
+    target_dir: str,
+    strategy: str,
+    browser_url: str,
+    execution_service: Container.execution_service = Provide[
+        Container.execution_service
+    ],
+):
+    target_dir = os.path.abspath(target_dir)
+    return await execution_service.run_pipeline(
+        target_dir=target_dir,
+        browser_url=browser_url,
+        context="mcp",
+        strategy=strategy,
+        use_tui=False,
+    )
 
 
 @mcp.tool()
-async def run_lens_test(
+async def run_pipeline(
     target_dir: str = ".",
     strategy: str = "auto",
-    browser_strategy: str = "local",
     browser_url: str = None,
-):
-    """
-    Run the Aether Lens analysis pipeline on a local directory (Blocking).
-
-    :param target_dir: The directory to analyze.
-    :param strategy: Analysis strategy (auto, frontend, backend, microservice, custom).
-    :param browser_strategy: local, docker, or inpod.
-    :param browser_url: Optional CDP URL for docker/inpod.
-    """
-    execution_service = container.execution_service()
-
-    # Note: ExecutionService handles container config internally
-    results = await execution_service.run_once(
-        target_dir=target_dir,
-        strategy=strategy,
-        browser_strategy=browser_strategy,
-        browser_url=browser_url,
-    )
-    return results
+) -> str:
+    """Run Aether Lens test pipeline on a target directory."""
+    return await _run_pipeline_impl(target_dir, strategy, browser_url)
 
 
 @mcp.tool()
@@ -141,12 +156,25 @@ def stop_lens_loop(target_dir: str):
 
     :param target_dir: Local directory being watched.
     """
-    from aether_lens.daemon.registry import stop_loop
 
     if stop_loop(target_dir):
         return f"Lens Loop stopped for {target_dir}."
     else:
         return f"No active Lens Loop found for {target_dir}."
+
+
+@inject
+def _check_prerequisites_impl(
+    target_dir: str,
+    check_service=Provide[Container.check_service],
+):
+    check_service.verbose = True
+    results = check_service.check_prerequisites(target_dir)
+
+    if results["valid"]:
+        return f"Checks Passed: {results}"
+    else:
+        return f"Checks Failed: {results}"
 
 
 @mcp.tool()
@@ -157,14 +185,7 @@ def check_prerequisites(target_dir: str = "."):
 
     :param target_dir: The directory to check.
     """
-    check_service = container.check_service()
-    check_service.verbose = True
-    results = check_service.check_prerequisites(target_dir)
-
-    if results["valid"]:
-        return f"Checks Passed: {results}"
-    else:
-        return f"Checks Failed: {results}"
+    return _check_prerequisites_impl(target_dir)
 
 
 def main():

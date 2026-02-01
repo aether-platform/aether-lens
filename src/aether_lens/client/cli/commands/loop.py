@@ -1,7 +1,11 @@
 import os
 
 import click
+from dependency_injector.wiring import Provide, inject
 from rich.console import Console
+
+from aether_lens.core.containers import Container
+from aether_lens.daemon.loop_daemon import run_loop_daemon
 
 console = Console(stderr=True)
 
@@ -18,10 +22,20 @@ console = Console(stderr=True)
     help="Browser execution strategy",
 )
 @click.option("--browser-url", help="CDP URL for docker/inpod strategy")
-def loop(target_dir, pod_name, namespace, remote_path, browser_strategy, browser_url):
+@inject
+def loop(
+    target_dir,
+    pod_name,
+    namespace,
+    remote_path,
+    browser_strategy,
+    browser_url,
+    loop_daemon=Provide[
+        Container.execution_service
+    ],  # Correcting this later to actual handler if needed
+):
     """Start a heavy development loop (Sync & Remote Test)."""
-    from aether_lens.client.cli.main import container
-    from aether_lens.core.services.daemon_service import DaemonService
+    # Using injected loop_daemon (test_runner in container terms actually)
 
     # Resolve default URL if not provided
     if not browser_url:
@@ -30,15 +44,13 @@ def loop(target_dir, pod_name, namespace, remote_path, browser_strategy, browser
         elif browser_strategy == "inpod":
             browser_url = os.getenv("TEST_RUNNER_URL", "ws://aether-lens-sidecar:9222")
 
-    container.config.browser_strategy.from_value(browser_strategy)
-    container.config.browser_url.from_value(browser_url)
+    # browser_strategy, browser_url are just variables here
 
     if not pod_name:
         console.print("[red]Error: Pod name is required for loop command.[/red]")
         return
 
-    service = DaemonService()
-    service.start_loop(
+    run_loop_daemon(
         target_dir=target_dir,
         pod_name=pod_name,
         namespace=namespace,

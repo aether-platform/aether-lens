@@ -1,7 +1,10 @@
 import subprocess
 
 import click
+from dependency_injector.wiring import Provide, inject
 from rich.console import Console
+
+from aether_lens.core.containers import Container
 
 console = Console(stderr=True)
 
@@ -9,22 +12,26 @@ console = Console(stderr=True)
 @click.command()
 @click.argument("target_dir", default=".")
 @click.option("--verbose", is_flag=True, help="Enable verbose logging")
-def check(target_dir, verbose):
+@inject
+def check(
+    target_dir,
+    verbose,
+    check_service: Container.check_service = Provide[Container.check_service],
+):
     """Validate environment prerequisites and configuration integrity."""
-    from aether_lens.client.cli.main import container
-
-    service = container.check_service()
-    service.verbose = verbose
-    service.check_prerequisites(target_dir)
+    check_service.verbose = verbose
+    check_service.check_prerequisites(target_dir)
 
 
-def check_prerequisites(target_dir=".", verbose=False):
+@inject
+def check_prerequisites(
+    target_dir=".",
+    verbose=False,
+    check_service: Container.check_service = Provide[Container.check_service],
+):
     """Legacy/Compatibility entry point for MCP/others."""
-    from aether_lens.client.cli.main import container
-
-    service = container.check_service()
-    service.verbose = verbose
-    return service.check_prerequisites(target_dir)
+    check_service.verbose = verbose
+    return check_service.check_prerequisites(target_dir)
 
 
 def _check_tool(results, tool_name, check_cmd, critical=True):

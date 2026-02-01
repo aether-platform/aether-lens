@@ -21,6 +21,8 @@ dependencies = [
     "fastmcp",
     "Pillow",
     "textual",
+    "logfire",
+    "pydantic>=2.0.0",
 ]
 
 [project.optional-dependencies]

@@ -2,6 +2,9 @@ import os
 from pathlib import Path
 
 import click
+from dependency_injector.wiring import Provide, inject
+
+from aether_lens.core.containers import Container
 
 
 @click.group()
@@ -13,21 +16,22 @@ def report():
 @report.command()
 @click.argument("target_dir", default=".", type=click.Path(exists=True))
 @click.option("--allure", is_flag=True, help="Open the real-time Allure dashboard.")
-def open(target_dir, allure):
+@inject
+def open(
+    target_dir,
+    allure,
+    report_service: Container.report_service = Provide[Container.report_service],
+):
     """Open test reports in your browser."""
-    from aether_lens.core.services.report_service import ReportService
-
-    service = ReportService()
-
     if allure:
-        url = service.open_report(use_allure=True)
+        url = report_service.open_report(use_allure=True)
         click.echo(f"Opening Allure Dashboard: {url}")
         click.echo(
             "(Make sure you have run: kubectl port-forward svc/allure-dashboard 5050:5050)"
         )
         return
 
-    path = service.open_report(target_dir=target_dir)
+    path = report_service.open_report(target_dir=target_dir)
     if not path:
         click.secho(f"Error: Report not found in {target_dir}/.aether", fg="red")
         click.echo("Run 'aether-lens run' first to generate a report.")

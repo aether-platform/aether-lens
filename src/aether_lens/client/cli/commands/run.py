@@ -1,16 +1,20 @@
 import asyncio
 
 import click
+from dependency_injector.wiring import Provide, inject
+
+from aether_lens.core.containers import Container
 
 
 @click.command()
-@click.argument("target", required=False)
+@click.argument("target", default=".")
 @click.option(
     "--analysis",
     "--analysis-strategy",
     "--strategy",
     "strategy",
     type=click.Choice(["auto", "frontend", "backend", "microservice", "custom"]),
+    default="auto",
     help="AI Analysis strategy (env: AETHER_ANALYSIS)",
 )
 @click.option(
@@ -55,6 +59,7 @@ import click
     "--allure-api-key",
     help="API Key for remote Allure (env: ALLURE_API_KEY)",
 )
+@inject
 def run(
     target,
     strategy,
@@ -67,24 +72,18 @@ def run(
     allure_endpoint,
     allure_project_id,
     allure_api_key,
+    service=Provide[Container.execution_service],
 ):
     """Run Aether Lens pipeline once."""
-    from aether_lens.client.cli.main import container
-
-    service = container.execution_service()
+    # container access removed, using injected service
 
     asyncio.run(
-        service.run_once(
+        service.run_pipeline(
             target_dir=target,
-            strategy=strategy,
-            browser_strategy=browser_strategy,
             browser_url=browser_url,
-            launch_browser=launch_browser,
-            headless=headless,
+            context="cli",
+            strategy=strategy,
             app_url=app_url,
-            allure_strategy=allure_strategy,
-            allure_endpoint=allure_endpoint,
-            allure_project_id=allure_project_id,
-            allure_api_key=allure_api_key,
+            use_tui=True,
         )
     )

@@ -3,8 +3,11 @@ import sys
 import time
 
 import click
+from dependency_injector.wiring import Provide, inject
 
-from aether_lens.core.models import PipelineLogEvent
+from aether_lens.core.containers import Container
+from aether_lens.core.domain.events import EventEmitter, JSONLinesTransport
+from aether_lens.core.domain.models import PipelineLogEvent
 
 
 @click.command()
@@ -18,14 +21,21 @@ from aether_lens.core.models import PipelineLogEvent
     default=False,
     help="Run in headless mode",
 )
-def executor(target_dir, strategy, browser_strategy, browser_url, app_url, headless):
+@inject
+def executor(
+    target_dir,
+    strategy,
+    browser_strategy,
+    browser_url,
+    app_url,
+    headless,
+    execution_service=Provide[Container.execution_service],
+):
     """
     Testkube-style Executor: runs pipeline and emits JSON Lines to stdout.
     """
 
     async def run():
-        from aether_lens.core.events import EventEmitter, JSONLinesTransport
-
         # Setup EventEmitter with abstracted JSONLinesTransport
         emitter = EventEmitter(transports=[JSONLinesTransport()])
 
@@ -39,17 +49,14 @@ def executor(target_dir, strategy, browser_strategy, browser_url, app_url, headl
             )
         )
 
-        from aether_lens.client.cli.main import container
-
         try:
-            service = container.execution_service()
-            await service.run_once(
+            # Note: ExecutionController handles container config internally
+            await execution_service.run_pipeline(
                 target_dir=target_dir,
-                strategy=strategy,
-                browser_strategy=browser_strategy,
                 browser_url=browser_url,
+                context="executor",
+                strategy=strategy,
                 app_url=app_url,
-                headless=headless,
                 use_tui=False,
                 event_emitter=emitter,
             )

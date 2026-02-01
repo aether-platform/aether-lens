@@ -1,12 +1,14 @@
+from dependency_injector.wiring import Provide, inject
 from rich.console import Console
 
-from aether_lens.core.session import LocalLensLoopHandler
-from aether_lens.core.watcher import start_watcher
+from aether_lens.core.containers import Container
+from aether_lens.daemon.controller.watcher import start_watcher
 from aether_lens.daemon.registry import register_loop
 
 console = Console(stderr=True)
 
 
+@inject
 def run_loop_daemon(
     target_dir,
     pod_name,
@@ -15,6 +17,7 @@ def run_loop_daemon(
     blocking=True,
     browser_strategy="inpod",
     browser_url=None,
+    test_runner=Provide[Container.test_runner],
 ):
     """
     Starts the loop daemon that watches for changes and triggers sync.
@@ -24,20 +27,17 @@ def run_loop_daemon(
     console.print(f" -> Remote Path: {remote_path}")
     console.print(f" -> Browser Strategy: {browser_strategy}")
 
-    handler = LocalLensLoopHandler(
-        target_dir,
-        pod_name,
-        namespace,
-        remote_path,
-        browser_strategy=browser_strategy,
-        browser_url=browser_url,
-    )
+    test_runner.pod_name = pod_name
+    test_runner.namespace = namespace
+    test_runner.remote_path = remote_path
+    test_runner.browser_strategy = browser_strategy
+    test_runner.browser_url = browser_url
 
     # Initial sync
-    handler.sync_and_trigger()
+    test_runner.sync_and_trigger()
 
     def on_change(path):
-        handler.sync_and_trigger(path)
+        test_runner.sync_and_trigger(path)
 
     observer = start_watcher(target_dir, on_change, blocking=blocking)
 

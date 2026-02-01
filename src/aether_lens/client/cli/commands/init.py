@@ -1,15 +1,22 @@
 import os
 
 import click
+from dependency_injector.wiring import Provide, inject
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
+
+from aether_lens.core.containers import Container
 
 console = Console(stderr=True)
 
 
 @click.command()
 @click.argument("target_dir", default=".")
-def init(target_dir):
+@inject
+def init(
+    target_dir,
+    init_service: Container.init_service = Provide[Container.init_service],
+):
     """Initialize Aether Lens configuration."""
     config_path = os.path.join(target_dir, "aether-lens.config.json")
 
@@ -119,10 +126,6 @@ def init(target_dir):
             deployment_config["inpod"] = deploy_conf
 
     # Write config
-    from aether_lens.core.services.init_service import InitService
-
-    service = InitService()
-
     config = {
         "strategy": analysis_strategy,
         "custom_instruction": custom_instruction,
@@ -133,5 +136,5 @@ def init(target_dir):
         "deployment": deployment_config,
     }
 
-    config_path = service.generate_default_config(target_dir, **config)
+    config_path = init_service.generate_default_config(target_dir, **config)
     console.print(f"[bold green]Successfully generated:[/bold green] {config_path}")

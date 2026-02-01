@@ -1,0 +1,17 @@
+- id: layout_check
+  label: "Home Layout Check"
+  description: "Verifies the layout of the home page"
+  command: "python3 -m aether_lens.core.runner layout_check --threshold 0.1"
+  tags: ["visual", "layout"]
+
+- id: login_valid
+  label: "Login (Valid)"
+  description: "Verifies successful login flow"
+  command: "python3 -m aether_lens.core.runner login_scenario --threshold 0.1"
+  tags: ["visual", "auth"]
+
+- id: build_check
+  label: "Production Build"
+  description: "Verifies that the build process completes successfully"
+  command: "npm run build"
+  tags: ["ci", "build"]
