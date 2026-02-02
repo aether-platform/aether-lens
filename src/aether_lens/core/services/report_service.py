@@ -1,5 +1,5 @@
-import os
 import webbrowser
+from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
@@ -27,24 +27,16 @@ class ReportService:
         if not report_dir.exists():
             raise FileNotFoundError(f".aether directory not found in {target_dir}")
 
-        if not report_dir.exists():
-            raise FileNotFoundError(f".aether directory not found in {target_dir}")
-
-        os.chdir(report_dir)
+        handler = partial(SimpleHTTPRequestHandler, directory=str(report_dir))
         server_address = ("", port)
-        httpd = HTTPServer(server_address, SimpleHTTPRequestHandler)
+        httpd = HTTPServer(server_address, handler)
 
-        try:
-            return httpd
-        finally:
-            # Note: The caller should handle the serving loop and directory reset if needed
-            # but usually it's easier to just let the service handle the serve_forever if possible.
-            pass
+        return httpd
 
-    def start_serving(self, httpd, use_allure=False):  # Added use_allure parameter
+    def start_serving(self, httpd, use_allure=False):
         try:
-            if use_allure:  # Corrected syntax and used the new parameter
-                self.open_report(use_allure=True)  # Used self to call open_report
+            if use_allure:
+                self.open_report(use_allure=True)
             httpd.serve_forever()
         except KeyboardInterrupt:
             httpd.server_close()

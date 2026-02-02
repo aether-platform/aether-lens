@@ -1,5 +1,6 @@
 import asyncio
-import os
+from os import environ
+from pathlib import Path
 
 import click
 from dependency_injector.wiring import Provide, inject
@@ -53,75 +54,79 @@ def watch(
     ],
 ):
     """Watch for file changes and trigger pipeline."""
-    target_dir = os.path.abspath(target or os.getenv("TARGET_DIR") or ".")
+    target_path = Path(target or environ.get("TARGET_DIR") or ".").resolve()
+    target_dir = str(target_path)
 
-    # Resolve strategy
-    strategy = strategy or os.getenv("AETHER_ANALYSIS") or "auto"
+    strategy = strategy or environ.get("AETHER_ANALYSIS") or "auto"
 
     console.print(f"[Lens Watch] Starting Watch Mode on {target_dir}...")
 
-    if headless:
-        # Headless mode: Simple console output
-        execution_service.start_watch(
-            target_dir=target_dir, strategy=strategy, use_tui=False
-        )
-        console.print("[Lens Watch] Watching for changes... (Press Ctrl+C to stop)")
-        try:
-            while True:
-                import time
+    async def run_watch():
+        if headless:
+            # Headless mode: Simple console output
+            # We need an orchestrator for watch, which is now provided by Orchestrator
+            # But execution_service is the Orchestrator?
+            # In containers.py: execution_service = ExecutionController
+            # But AetherOrchestrator exists too.
 
-                time.sleep(1)
-        except KeyboardInterrupt:
-            execution_service.stop_dev_loop(target_dir)
-    else:
-        # TUI mode: Persistent dashboard
-        # We start a run manually first, or just let the watcher trigger.
-        # But we need the dashboard to be the long-lived process.
+            # For now, if we use ExecutionController directly:
+            from aether_lens.daemon.controller.orchestrator import AetherOrchestrator
 
-        app = PipelineDashboard([], strategy_name=strategy)
+            orchestrator = AetherOrchestrator(execution_service)
 
-        # Polymorphic event emitter for the controller to talk to this TUI
-        emitter = EventEmitter(
-            transports=[
-                CallbackTransport(
-                    callback=lambda e: execution_service._handle_event_for_tui(e, app)
-                )
-            ]
-        )
-
-        async def run_logic():
-            # Initial run
-            await execution_service.run_pipeline(
-                target_dir=target_dir,
-                browser_url=browser_url,
-                strategy=strategy,
-                app_url=app_url,
-                use_tui=True,
-                event_emitter=emitter,
+            await orchestrator.start_watch(
+                target_dir=target_dir, strategy=strategy, use_tui=False
+            )
+            console.print("[Lens Watch] Watching for changes... (Press Ctrl+C to stop)")
+            try:
+                while True:
+                    await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                execution_service.stop_dev_loop(target_dir)
+        else:
+            app = PipelineDashboard([], strategy_name=strategy)
+            emitter = EventEmitter(
+                transports=[
+                    CallbackTransport(
+                        callback=lambda e: execution_service._handle_event_for_tui(
+                            e, app
+                        )
+                    )
+                ]
             )
 
-            # Start watcher via controller
-            # We don't use the controller's run_pipeline loop here because we want to pass the emitter
-            from aether_lens.daemon.controller.watcher import start_watcher
+            async def run_logic():
+                await execution_service.run_pipeline(
+                    target_dir=target_dir,
+                    browser_url=browser_url,
+                    strategy=strategy,
+                    app_url=app_url,
+                    use_tui=True,
+                    event_emitter=emitter,
+                )
 
-            def on_change(path):
-                # Trigger pipeline with the same emitter
-                asyncio.run(
-                    execution_service.run_pipeline(
+                from aether_lens.daemon.controller.watcher import start_watcher
+
+                async def _on_watch_change(path):
+                    await execution_service.run_pipeline(
                         target_dir=target_dir,
                         strategy=strategy,
                         use_tui=True,
                         event_emitter=emitter,
                         app_url=app_url,
                     )
-                )
 
-            observer = start_watcher(target_dir, on_change, blocking=False)
-            execution_service.lifecycle_registry.register(target_dir, observer)
+                def on_change(path):
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(_on_watch_change(path))
 
-        app.run_logic_callback = lambda inst: run_logic()
+                observer = start_watcher(target_dir, on_change, blocking=False)
+                execution_service.lifecycle_registry.register(target_dir, observer)
 
-        try:
-            asyncio.run(app.run_async())
-        except KeyboardInterrupt:
-            execution_service.stop_dev_loop(target_dir)
+            app.run_logic_callback = lambda inst: run_logic()
+            await app.run_async()
+
+    try:
+        asyncio.run(run_watch())
+    except KeyboardInterrupt:
+        execution_service.stop_dev_loop(target_dir)

@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 
 import click
 from dependency_injector.wiring import Provide, inject
@@ -18,9 +18,9 @@ def init(
     init_service: Container.init_service = Provide[Container.init_service],
 ):
     """Initialize Aether Lens configuration."""
-    config_path = os.path.join(target_dir, "aether-lens.config.json")
+    config_path = Path(target_dir) / "aether-lens.config.json"
 
-    if os.path.exists(config_path):
+    if config_path.exists():
         if not Confirm.ask(
             f"[yellow]{config_path} already exists. Overwrite?[/yellow]", default=False
         ):
@@ -55,6 +55,7 @@ def init(
 
     allure_strategy = "none"
     allure_endpoint = ""
+    allure_project_id = "default"
 
     if allure_choice == "managed":
         # Match browser strategy
@@ -83,7 +84,6 @@ def init(
             compose_file = Prompt.ask(
                 "Compose file path", default="docker-compose.yaml"
             )
-            # Addressing user feedback: Suggest 'app' or 'web' as standard, or empty for full stack
             service = Prompt.ask(
                 "Target Service Name (default: app, empty for full stack)",
                 default="app",
@@ -98,10 +98,6 @@ def init(
                 "service": service,
                 "health_check": health_check,
             }
-            # Also map local to this if running locally but using compose?
-            # pipeline.py logic maps 'browser_strategy' (key) to deployment config.
-            # If browser_strategy is 'local', we might want to use 'docker' config?
-            # Let's map both keys if appropriate.
             deployment_config["local"] = deployment_config["docker"]
 
     elif browser_strategy in ["kubernetes", "inpod"]:
@@ -136,5 +132,5 @@ def init(
         "deployment": deployment_config,
     }
 
-    config_path = init_service.generate_default_config(target_dir, **config)
-    console.print(f"[bold green]Successfully generated:[/bold green] {config_path}")
+    result_path = init_service.generate_default_config(target_dir, **config)
+    console.print(f"[bold green]Successfully generated:[/bold green] {result_path}")

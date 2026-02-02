@@ -1,5 +1,5 @@
-import os
 import sys
+from os import environ
 
 from dependency_injector import containers, providers
 
@@ -10,9 +10,8 @@ class Container(containers.DeclarativeContainer):
     @staticmethod
     def validate_environment():
         """Proactively check for environment issues like missing SOCKS support."""
-        # Use simple os.environ check to avoid httpx pick-up issues
         for var in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
-            val = os.getenv(var)
+            val = environ.get(var)
             if val and "socks" in val.lower():
                 try:
                     import socksio  # noqa: F401
@@ -28,7 +27,6 @@ class Container(containers.DeclarativeContainer):
 
     config = providers.Configuration()
 
-    # Services (Using Factory to avoid circular imports during class definition)
     @staticmethod
     def _create_check_service():
         from .services.check_service import CheckService
@@ -47,9 +45,8 @@ class Container(containers.DeclarativeContainer):
     def _create_watch_controller(execution_ctrl, **kwargs):
         from aether_lens.daemon.controller.watcher import WatchController
 
-        # Note: watcher might need a callback, but we can provide a default or handle it in the service/factory
         return WatchController(
-            target_dir=None, on_change_callback=None, execution_ctrl=execution_ctrl
+            target_dir=None, on_change_callback=None, orchestrator=execution_ctrl
         )
 
     @staticmethod
@@ -94,8 +91,6 @@ class Container(containers.DeclarativeContainer):
             namespace=namespace,
             remote_path=remote_path,
         )
-
-    # Services (Using Factory to avoid circular imports during class definition)
 
     lifecycle_registry = providers.Singleton(_create_lifecycle_registry)
     loop_handler = providers.Factory(_create_loop_handler)

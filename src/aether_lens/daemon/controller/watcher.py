@@ -1,6 +1,6 @@
-import os
-import signal
+import asyncio
 import time
+from os import environ
 
 from rich.console import Console
 from watchdog.events import FileSystemEventHandler
@@ -12,7 +12,6 @@ console = Console(stderr=True)
 class WatchController(FileSystemEventHandler):
     """
     Unified controller for file watching and deployment lifecycle.
-    Merges WatchService and watcher.py logic.
     """
 
     def __init__(
@@ -24,7 +23,7 @@ class WatchController(FileSystemEventHandler):
         self.orchestrator = orchestrator
         self.last_triggered = 0
         self.observer = None
-        self.cleanup_data = None  # {"cmd": str, "proc": Popen}
+        self.cleanup_data = None  # {"cmd": str, "proc": Process}
 
     def on_any_event(self, event):
         if event.is_directory or event.event_type not in [
@@ -35,6 +34,7 @@ class WatchController(FileSystemEventHandler):
         ]:
             return
 
+        # Simple ignore list
         if any(
             x in event.src_path
             for x in [".git", "node_modules", ".astro", "__pycache__"]
@@ -45,7 +45,13 @@ class WatchController(FileSystemEventHandler):
         if (current_time - self.last_triggered) > self.debounce_seconds:
             console.print(f"[Watcher] Change detected: {event.src_path}")
             self.last_triggered = current_time
-            self.on_change_callback(event.src_path)
+            # Note: callback might need to be wrapped in asyncio if it's async
+            if asyncio.iscoroutinefunction(self.on_change_callback):
+                asyncio.run_coroutine_threadsafe(
+                    self.on_change_callback(event.src_path), asyncio.get_event_loop()
+                )
+            else:
+                self.on_change_callback(event.src_path)
 
     def start(self, blocking=True):
         self.observer = Observer()
@@ -70,13 +76,13 @@ class WatchController(FileSystemEventHandler):
     async def setup_deployment(self, target_dir, browser_strategy, config):
         """Logic for setting up the test environment (compose, kubectl, etc.)"""
         if not self.orchestrator:
-            return None  # Or handle as no-op
+            return None
         deployment_config = config.get("deployment", {})
         current_env = browser_strategy.replace("-", "_")
         env_deploy = deployment_config.get(current_env)
 
-        deploy_cmd = os.getenv("DEPLOY_COMMAND")
-        cleanup_cmd = os.getenv("CLEANUP_COMMAND")
+        deploy_cmd = environ.get("DEPLOY_COMMAND")
+        cleanup_cmd = environ.get("CLEANUP_COMMAND")
         health_check_url = config.get("health_check_url")
 
         if env_deploy and not deploy_cmd:
@@ -94,12 +100,12 @@ class WatchController(FileSystemEventHandler):
 
         if deploy_cmd:
             if env_deploy and env_deploy.get("background"):
-                proc = self.orchestrator.start_background_process(
+                proc = await self.orchestrator.start_background_process(
                     deploy_cmd, cwd=target_dir
                 )
                 self.cleanup_data = {"cmd": cleanup_cmd, "proc": proc}
             else:
-                success, _ = self.orchestrator.run_deployment_hook(
+                success, _ = await self.orchestrator.run_deployment_hook(
                     deploy_cmd, cwd=target_dir
                 )
                 if not success:
@@ -120,17 +126,15 @@ class WatchController(FileSystemEventHandler):
         proc = self.cleanup_data.get("proc")
 
         if proc:
-            console.print(
-                f"\n[Watcher] Stopping background process (PID: {proc.pid})..."
-            )
+            console.print("\n[Watcher] Stopping background process...")
             try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-            except Exception:
                 proc.terminate()
+            except Exception:
+                pass
 
         if cleanup_cmd:
             if self.orchestrator:
-                self.orchestrator.run_deployment_hook(cleanup_cmd, cwd=target_dir)
+                await self.orchestrator.run_deployment_hook(cleanup_cmd, cwd=target_dir)
 
         self.cleanup_data = None
 

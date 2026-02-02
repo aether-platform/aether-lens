@@ -1,6 +1,6 @@
 import argparse
 import asyncio
-import os
+from pathlib import Path
 
 from PIL import Image
 from playwright.async_api import async_playwright
@@ -14,7 +14,7 @@ except ImportError:
 class VisualTestRunner:
     def __init__(self, base_url: str = None, current_dir: str = None):
         self.base_url = base_url.rstrip("/") if base_url else ""
-        self.current_dir = current_dir or os.getcwd()
+        self.current_dir = Path(current_dir or Path.cwd())
         self.browser_strategy = "local"
 
     def calculate_pixel_diff(self, img1_path, img2_path, diff_path, threshold=0.1):
@@ -76,16 +76,16 @@ class VisualTestRunner:
             return False, f"Navigation failed: {e}", None
 
         # Screenshot logic
-        baseline_dir = os.path.join(self.current_dir, "tests", "baselines")
-        os.makedirs(baseline_dir, exist_ok=True)
-        baseline_path = os.path.join(baseline_dir, f"{test_id_key}.png")
+        baseline_dir = self.current_dir / "tests" / "baselines"
+        baseline_dir.mkdir(parents=True, exist_ok=True)
+        baseline_path = baseline_dir / f"{test_id_key}.png"
 
-        current_path = os.path.join(self.current_dir, f"{test_id_key}_current.png")
-        diff_path = os.path.join(self.current_dir, f"{test_id_key}_diff.png")
+        current_path = self.current_dir / f"{test_id_key}_current.png"
+        diff_path = self.current_dir / f"{test_id_key}_diff.png"
 
-        await page.screenshot(path=current_path, full_page=True)
+        await page.screenshot(path=str(current_path), full_page=True)
 
-        if not os.path.exists(baseline_path):
+        if not baseline_path.exists():
             with open(current_path, "rb") as fsrc:
                 with open(baseline_path, "wb") as fdst:
                     while True:
@@ -93,19 +93,23 @@ class VisualTestRunner:
                         if not buf:
                             break
                         fdst.write(buf)
-            return True, "Baseline created", baseline_path
+            return True, "Baseline created", str(baseline_path)
 
         # Compare
         threshold = float(vrt_config.get("threshold", 0.1))
         mismatch, err = self.calculate_pixel_diff(
-            baseline_path, current_path, diff_path, threshold
+            str(baseline_path), str(current_path), str(diff_path), threshold
         )
 
         if err:
             return False, f"Comparison error: {err}", None
 
         if mismatch > 0:
-            return False, f"Visual mismatch detected ({mismatch} pixels)", diff_path
+            return (
+                False,
+                f"Visual mismatch detected ({mismatch} pixels)",
+                str(diff_path),
+            )
 
         return True, "Visual test passed", None
 
@@ -123,14 +127,8 @@ class VisualTestRunner:
 
             success = True
             try:
-                # Execute the scenario function (e.g. login, navigate)
                 await scenario_func(page, parameters)
 
-                # Perform VRT snapshot if implicit path is provided or scenario implies it
-                # For backward compatibility, we assume layout_check sets up the page and we take a snapshot here
-                # OR the scenario function handles assertions itself.
-
-                # Let's enforce taking a snapshot for verification if it's a 'check'
                 path = parameters.get("path", "/")
                 viewport = parameters.get("viewport", "1280x720")
 

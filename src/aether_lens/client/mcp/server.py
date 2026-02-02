@@ -1,5 +1,5 @@
 import json
-import os
+from pathlib import Path
 
 import logfire
 from dependency_injector.wiring import Provide, inject
@@ -14,7 +14,6 @@ logfire.instrument_pydantic()
 # Initialize and wire container for MCP process
 Container.validate_environment()
 container = Container()
-container.config.from_dict({"browser_strategy": "local", "headless": True})
 container.wire(
     modules=[
         "aether_lens.daemon.controller.execution",
@@ -41,7 +40,7 @@ async def init_lens(
     :param browser_strategy: local, docker, kubernetes, or inpod.
     :param allure_strategy: managed, external, or none.
     """
-    config_path = os.path.join(target_dir, "aether-lens.config.json")
+    config_path = Path(target_dir) / "aether-lens.config.json"
 
     default_config = {
         "strategy": strategy,
@@ -54,6 +53,7 @@ async def init_lens(
         },
     }
 
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config_path, "w") as f:
         json.dump(default_config, f, indent=2)
 
@@ -61,14 +61,13 @@ async def init_lens(
 
 
 @inject
-def _get_vibe_insight_impl(
+async def _get_vibe_insight_impl(
     target_dir: str,
     strategy: str,
-    execution_service: Container.execution_service = Provide[
-        Container.execution_service
-    ],
+    execution_service=Provide[Container.execution_service],
 ):
-    diff = execution_service.get_git_diff(target_dir)
+    # execution_service.get_git_diff is now async
+    diff = await execution_service.get_git_diff(target_dir)
     if not diff:
         return "No changes detected."
 
@@ -77,14 +76,14 @@ def _get_vibe_insight_impl(
 
 
 @mcp.tool()
-def get_vibe_insight(target_dir: str = ".", strategy: str = "auto"):
+async def get_vibe_insight(target_dir: str = ".", strategy: str = "auto"):
     """
     Get AI-powered vibe insight (analysis only) for the current changes.
 
     :param target_dir: The directory to analyze.
     :param strategy: Analysis strategy to use.
     """
-    return _get_vibe_insight_impl(target_dir, strategy)
+    return await _get_vibe_insight_impl(target_dir, strategy)
 
 
 @inject
@@ -92,11 +91,9 @@ async def _run_pipeline_impl(
     target_dir: str,
     strategy: str,
     browser_url: str,
-    execution_service: Container.execution_service = Provide[
-        Container.execution_service
-    ],
+    execution_service=Provide[Container.execution_service],
 ):
-    target_dir = os.path.abspath(target_dir)
+    target_dir = str(Path(target_dir).resolve())
     return await execution_service.run_pipeline(
         target_dir=target_dir,
         browser_url=browser_url,
@@ -157,12 +154,12 @@ def stop_lens_loop(
 
 
 @inject
-def _check_prerequisites_impl(
+async def _check_prerequisites_impl(
     target_dir: str,
     check_service=Provide[Container.check_service],
 ):
     check_service.verbose = True
-    results = check_service.check_prerequisites(target_dir)
+    results = await check_service.check_prerequisites(target_dir)
 
     if results["valid"]:
         return f"Checks Passed: {results}"
@@ -171,14 +168,14 @@ def _check_prerequisites_impl(
 
 
 @mcp.tool()
-def check_prerequisites(target_dir: str = "."):
+async def check_prerequisites(target_dir: str = "."):
     """
     Validate environment prerequisites and configuration integrity.
     Checks config schema, tool availability (Docker, Node, etc.), and reports status.
 
     :param target_dir: The directory to check.
     """
-    return _check_prerequisites_impl(target_dir)
+    return await _check_prerequisites_impl(target_dir)
 
 
 def main():

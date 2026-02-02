@@ -1,6 +1,3 @@
-import os
-from pathlib import Path
-
 import click
 from dependency_injector.wiring import Provide, inject
 
@@ -43,37 +40,22 @@ def open(
 @report.command()
 @click.argument("target_dir", default=".", type=click.Path(exists=True))
 @click.option("--port", default=43210, help="Port to serve the report on.")
-def serve(target_dir, port):
+@inject
+def serve(
+    target_dir,
+    port,
+    report_service: Container.report_service = Provide[Container.report_service],
+):
     """Serve the report directory via HTTP."""
 
     try:
-        # We need to handle the serve loop here since it's interactive
-        report_dir = Path(target_dir) / ".aether"
-        if not report_dir.exists():
-            click.secho(f"Error: .aether directory not found in {target_dir}", fg="red")
-            return
-
-        old_dir = os.getcwd()
-        os.chdir(report_dir)
-
-        import http.server
-
-        server_address = ("", port)
-        httpd = http.server.HTTPServer(
-            server_address, http.server.SimpleHTTPRequestHandler
-        )
+        httpd = report_service.serve_report(target_dir=target_dir, port=port)
 
         click.secho("Aether Lens Conformance UI serving at:", fg="blue", bold=True)
         click.secho(f"http://localhost:{port}/report.html", fg="cyan", underline=True)
         click.echo("\nPress Ctrl+C to stop.")
 
-        try:
-            httpd.serve_forever()
-        except KeyboardInterrupt:
-            click.echo("\nStopping server...")
-            httpd.server_close()
-        finally:
-            os.chdir(old_dir)
+        report_service.start_serving(httpd)
 
     except Exception as e:
         click.secho(f"Error: {e}", fg="red")

@@ -1,10 +1,9 @@
 import asyncio
 import json
-import os
 import platform
-import subprocess
 import time
 import uuid
+from os import environ
 from pathlib import Path
 from typing import Tuple
 
@@ -52,8 +51,8 @@ class ExecutionController:
         if not services:
             return True
 
-        # Global orchestration strategy (cli or sdk)
-        global_strategy = config.get("orchestration_strategy", "cli")
+        # Global orchestration strategy (sdk is now the default)
+        global_strategy = config.get("orchestration_strategy", "sdk")
 
         for svc in services:
             name = svc.get("name", "Unknown")
@@ -68,7 +67,7 @@ class ExecutionController:
             msg = f" -> [Management] Starting service: [cyan]{name}[/cyan] ({command}) [Strategy: {svc_strategy}]"
             console.print(msg)
 
-            # Pre-check tool presence to give better error messages
+            # Pre-check tool presence
             tool_ok, tool_err = self._check_tool_presence(command)
             if not tool_ok:
                 err_msg = f"    - [red]Error:[/red] {tool_err}. Please ensure the tool is installed."
@@ -90,7 +89,7 @@ class ExecutionController:
             if svc_strategy == "sdk":
                 proc = await self._start_via_sdk(command, cwd=target_dir)
             else:
-                proc = self.start_background_process(command, cwd=target_dir)
+                proc = await self.start_background_process(command, cwd=target_dir)
 
             if proc:
                 if self.lifecycle_registry:
@@ -112,7 +111,7 @@ class ExecutionController:
             console.print(
                 "    - [red]Error:[/red] 'python-on-whales' library not installed. Falling back to CLI."
             )
-            return self.start_background_process(command, cwd=cwd)
+            return await self.start_background_process(command, cwd=cwd)
 
         console.print(
             "    - [cyan][SDK][/cyan] Orchestrating via Python-on-Whales SDK..."
@@ -121,83 +120,74 @@ class ExecutionController:
             docker_client = DockerClient()
 
             if "compose" in command:
+                # Use the SDK to manage compose projects.
+                project_dir = Path(cwd) if cwd else Path.cwd()
+                compose_files = [str(project_dir / "docker-compose.yml")]
+
                 action = "up"
                 if "down" in command:
                     action = "down"
 
                 if action == "up":
-                    await asyncio.to_thread(docker_client.compose.up, detach=True)
+                    await asyncio.to_thread(
+                        docker_client.compose.up,
+                        detach=True,
+                        config_files=compose_files,
+                    )
                 else:
-                    await asyncio.to_thread(docker_client.compose.down)
-
+                    await asyncio.to_thread(
+                        docker_client.compose.down, config_files=compose_files
+                    )
                 return True
 
-            return self.start_background_process(command, cwd=cwd)
+            return await self.start_background_process(command, cwd=cwd)
         except Exception as e:
             console.print(f"    - [red]SDK Error:[/red] {e}")
             return None
 
-    def start_background_process(self, command, cwd=None):
-        """Start a background process using the configured strategy."""
-        # Drop legacy V1 support and standardize on V2
+    async def start_background_process(self, command, cwd=None):
+        """Start a background process using asyncio."""
+        # Standardize on V2
         if command.startswith("docker-compose"):
-            new_command = command.replace("docker-compose", "docker compose", 1)
-            console.print(
-                f"    - [dim]Standardizing legacy command to:[/dim] [cyan]{new_command}[/cyan]"
-            )
-            command = new_command
+            command = command.replace("docker-compose", "docker compose", 1)
 
         try:
-            kwargs = {}
-            if platform.system() != "Windows":
-                kwargs["preexec_fn"] = os.setsid
-
-            return subprocess.Popen(command, cwd=cwd, shell=True, **kwargs)
+            return await asyncio.create_subprocess_shell(command, cwd=cwd)
         except Exception as e:
             console.print(f"    - [red]Error starting background process:[/red] {e}")
             return None
 
     def _check_tool_presence(self, command: str) -> Tuple[bool, str]:
-        """Check if the required tool is available. (V2 only, os-based)"""
+        """Check if the required tool is available using Path."""
         if not command:
             return True, ""
 
-        parts = command.split()
-        first_word = parts[0]
-
-        # Standard check for docker/docker-compose -> docker compose
-        if first_word in ["docker-compose", "docker"]:
-            if self._find_executable("docker"):
-                return True, ""
-            return (
-                False,
-                "Docker NOT found. Please install Docker (V2 support required).",
-            )
-
-        # Generic check for other tools
+        first_word = command.split()[0]
         if self._find_executable(first_word):
             return True, ""
-
         return False, f"Command '{first_word}' not found in PATH."
 
     def _find_executable(self, name):
-        """Replacement for shutil.which using only os module."""
-        path = os.environ.get("PATH", os.defpath)
-        for directory in path.split(os.pathsep):
-            directory = directory.strip('"')
-            file_path = os.path.join(directory, name)
-            if os.path.isfile(file_path) and os.access(file_path, os.X_OK):
-                return file_path
-            if platform.system() == "Windows" and not name.lower().endswith(".exe"):
-                exe_path = file_path + ".exe"
-                if os.path.isfile(exe_path) and os.access(exe_path, os.X_OK):
-                    return exe_path
+        """Path-based replacement for which."""
+        env_path = environ.get("PATH", "")
+        # Handle platform-specific path separators
+        sep = Path("").drive + ";" if platform.system() == "Windows" else ":"
+        for p in env_path.split(sep):
+            if not p:
+                continue
+            file_path = Path(p.strip('"')) / name
+            if file_path.exists() and not file_path.is_dir():
+                return str(file_path)
+            if platform.system() == "Windows":
+                exe_path = file_path.with_suffix(".exe")
+                if exe_path.exists() and not exe_path.is_dir():
+                    return str(exe_path)
         return None
 
     def load_config(self, target_dir, overrides=None):
-        config_path = os.path.join(target_dir, "aether-lens.config.json")
+        config_path = Path(target_dir) / "aether-lens.config.json"
         config = {}
-        if os.path.exists(config_path):
+        if config_path.exists():
             try:
                 with open(config_path, "r") as f:
                     config = json.load(f)
@@ -206,11 +196,9 @@ class ExecutionController:
                     f"[yellow]Warning: Failed to load config file: {e}[/yellow]"
                 )
 
-        # Merge overrides (CLI arguments take precedence)
         if overrides:
             config.update({k: v for k, v in overrides.items() if v is not None})
 
-        # Unify defaults for browser strategy and URL
         browser_strategy = config.get("browser_strategy", "local")
         browser_url = config.get("browser_url")
 
@@ -218,7 +206,7 @@ class ExecutionController:
             if browser_strategy == "docker":
                 browser_url = "ws://localhost:9222"
             elif browser_strategy == "inpod":
-                browser_url = os.getenv(
+                browser_url = environ.get(
                     "TEST_RUNNER_URL", "ws://aether-lens-sidecar:9222"
                 )
 
@@ -251,27 +239,27 @@ class ExecutionController:
 
         console.print(f" -> [Execution] Session saved: [cyan]{filename}[/cyan]")
 
-    def run_deployment_hook(self, command, cwd=None):
+    async def run_deployment_hook(self, command, cwd=None):
         if not command:
             return True, "No command provided"
         console.print(
             f" -> [Execution] Running deployment hook: [cyan]{command}[/cyan]"
         )
         try:
-            result = subprocess.run(
+            proc = await asyncio.create_subprocess_shell(
                 command,
                 cwd=cwd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                check=False,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            if result.returncode == 0:
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
                 console.print("    - [green]Deployment OK[/green]")
-                return True, result.stdout
+                return True, stdout.decode().strip()
             else:
-                console.print(f"      {result.stderr.strip()}")
-                return False, result.stderr
+                err = stderr.decode().strip()
+                console.print(f"      {err}")
+                return False, err
         except Exception as e:
             console.print(f"    - [red]Deployment Error:[/red] {e}")
             return False, str(e)
@@ -314,16 +302,18 @@ class ExecutionController:
             )
         return False
 
-    def get_git_diff(self, target_dir):
+    async def get_git_diff(self, target_dir):
         try:
-            result = subprocess.run(
-                ["git", "diff", "HEAD"],
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "diff",
+                "HEAD",
                 cwd=target_dir,
-                capture_output=True,
-                text=True,
-                check=True,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            return result.stdout
+            stdout, _ = await proc.communicate()
+            return stdout.decode().strip()
         except Exception:
             return ""
 
@@ -342,12 +332,11 @@ class ExecutionController:
         close_browser: bool = True,
         app_url: str = None,
     ):
-        target_dir = os.path.abspath(target_dir or ".")
+        target_dir = str(Path(target_dir or ".").resolve())
 
-        # Phase 1: Preparation (Skaffold-like Orchestration)
+        # Phase 1: Preparation
         self._emit_phase_log(event_emitter, "PREPARATION")
 
-        # Merge CLI arguments as overrides
         overrides = {
             "browser_url": browser_url,
             "strategy": strategy,
@@ -355,7 +344,6 @@ class ExecutionController:
         }
         config = self.load_config(target_dir, overrides=overrides)
 
-        # Environment Resolution
         exec_env_type = config.get("execution_env", "local")
 
         if exec_env_type == "docker":
@@ -373,7 +361,6 @@ class ExecutionController:
         else:
             env_runner = LocalEnvironment()
 
-        # Update local vars from resolved config
         strategy = config.get("strategy", strategy)
         browser_url = config.get("browser_url")
         app_url = config.get("app_url", app_url)
@@ -386,7 +373,6 @@ class ExecutionController:
                 PipelineLogEvent(type="log", timestamp=time.time(), message=intro_msg)
             )
 
-        # 0. Service Orchestration (Skaffold-like)
         if not await self.ensure_services(
             target_dir, config, event_emitter=event_emitter
         ):
@@ -395,14 +381,13 @@ class ExecutionController:
             )
             return
 
-        # 1. Deployment hooks
         deploy_conf = config.get("deployment", {}).get(
             config.get("browser_strategy", "local")
         )
         if deploy_conf:
             command = deploy_conf.get("command")
             if command:
-                success, msg = self.run_deployment_hook(command, cwd=target_dir)
+                success, msg = await self.run_deployment_hook(command, cwd=target_dir)
                 if not success:
                     if event_emitter:
                         self._emit_error_log(
@@ -423,8 +408,7 @@ class ExecutionController:
                         )
                     return
 
-        # 2. Get diff
-        diff = self.get_git_diff(target_dir)
+        diff = await self.get_git_diff(target_dir)
         if not diff:
             msg = "[yellow]No changes detected. Skipping analysis.[/yellow]"
             console.print(msg)
@@ -434,9 +418,8 @@ class ExecutionController:
                 )
             return
 
-        # Phase 2: AI Analysis (Planner)
+        # Phase 2: Analysis
         self._emit_phase_log(event_emitter, "ANALYSIS")
-        # AI Analysis
         analysis = self.planner.run_analysis(
             diff, context, strategy, custom_instruction
         )
@@ -450,7 +433,8 @@ class ExecutionController:
                     PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
                 )
             return
-        # Phase 3: Quality Guard
+
+        # Phase 3: Quality
         quality_conf = config.get(
             "quality_checks", {"enabled": True, "providers": ["ruff"]}
         )
@@ -474,14 +458,10 @@ class ExecutionController:
                             "command": "sonar-scanner",
                         }
                     )
-
-            # Prepend quality tests to the recommended tests
             all_tests = quality_tests + all_tests
 
         # Phase 4: Execution
         self._emit_phase_log(event_emitter, "EXECUTION")
-
-        # Execution
         results = await self._execute_tests(
             all_tests,
             strategy,
@@ -492,18 +472,15 @@ class ExecutionController:
             environment=env_runner,
         )
 
-        # Session persistence
         self.save_test_session(target_dir, results, strategy)
 
-        # Reporting
         allure_strategy = config.get("allure_strategy", "none")
         if allure_strategy != "none":
             report.export_to_allure(results, target_dir)
 
-        # Cleanup process if any
         if self.cleanup_process and close_browser:
             try:
-                os.killpg(os.getpgid(self.cleanup_process.pid), 15)
+                self.cleanup_process.terminate()
             except Exception:
                 pass
 
@@ -519,13 +496,10 @@ class ExecutionController:
         use_tui,
         environment=None,
     ):
-        """Unified execution logic for both TUI and Headless modes."""
         results = []
 
         async def run_core(app_instance=None):
             nonlocal results
-
-            # Polymorphic emitter based on mode
             current_emitter = event_emitter
             if use_tui and app_instance:
                 current_emitter = event_emitter or EventEmitter(
@@ -552,22 +526,19 @@ class ExecutionController:
             app = PipelineDashboard(tests, strategy_name=strategy)
             app.run_logic_callback = run_core
 
-            @logfire.instrument("Visual Test Execution (TUI)")
             async def run_with_dashboard():
                 await app.run_async()
 
             await run_with_dashboard()
         else:
-            # If headless or already has emitter (e.g. from a parent TUI)
             await run_core()
         return results
 
     def _handle_event_for_tui(self, event, app):
-        """Map generic pipeline events to TUI-specific updates."""
         if hasattr(event, "type"):
             etype = getattr(event, "type")
         else:
-            return  # Ignore non-event objects
+            return
 
         if etype == "test_started":
             label = getattr(event, "label", "Unknown")

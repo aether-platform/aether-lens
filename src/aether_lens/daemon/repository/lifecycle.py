@@ -5,11 +5,10 @@ from typing import Any, Dict
 class LifecycleRegistry:
     """
     DI-managed registry for active background processes (WATCH/LOOP).
-    Replaces the global state in registry.py.
     """
 
     def __init__(self):
-        # target_dir -> list of handles (Observer, Popen, etc.)
+        # target_dir -> list of handles
         self._active_resources: Dict[str, list] = {}
         self._lock = threading.Lock()
 
@@ -32,16 +31,10 @@ class LifecycleRegistry:
                             handle.stop()
                             handle.join()
                         elif hasattr(handle, "terminate"):
-                            # subprocess.Popen
-                            import os
-                            import signal
-
-                            # Kill process group if started with setsid
-                            try:
-                                os.killpg(os.getpgid(handle.pid), signal.SIGTERM)
-                            except Exception:
-                                handle.terminate()
-                            handle.wait(timeout=5)
+                            # Process handle (asyncio or subprocess)
+                            handle.terminate()
+                            # For sync processes, we might want to wait,
+                            # but we can't await here easily without making stop async.
                     except Exception:
                         pass
                 return True

@@ -1,6 +1,6 @@
+import asyncio
 import base64
 import json
-import os
 import time
 import uuid
 from datetime import datetime
@@ -10,12 +10,20 @@ from rich.console import Console
 
 console = Console(stderr=True)
 
+try:
+    from python_on_whales import DockerClient
+except ImportError:
+    DockerClient = None
+
 
 def image_to_base64(path):
-    if not path or not os.path.exists(path):
+    if not path:
+        return None
+    p = Path(path)
+    if not p.exists():
         return None
     try:
-        with open(path, "rb") as image_file:
+        with open(p, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode("utf-8")
     except Exception:
         return None
@@ -37,9 +45,8 @@ def generate_conformance_report(results, target_dir, strategies=None):
         abs_p = Path(p)
         if not abs_p.is_absolute():
             abs_p = target_path / p
-        return image_to_base64(str(abs_p))
+        return image_to_base64(abs_p)
 
-    # Group results by strategy if possible, or use 'default'
     results_by_strategy = {}
     total_tests = len(results)
     passed_tests = 0
@@ -47,7 +54,6 @@ def generate_conformance_report(results, target_dir, strategies=None):
     new_baselines = 0
 
     for res in results:
-        # Clone to avoid mutating original
         item = res.copy()
 
         if item["status"] == "PASSED":
@@ -59,39 +65,25 @@ def generate_conformance_report(results, target_dir, strategies=None):
         if strategy not in results_by_strategy:
             results_by_strategy[strategy] = []
 
-        # Process images for visual tests
         if item["type"] == "visual":
-            # Current screenshot or diff
             item["screenshot_b64"] = resolve_image(item.get("artifact"))
-
-            # Baseline
             item["baseline_b64"] = resolve_image(item.get("baseline"))
 
-            # If artifact is a diff, we might want to distinguish them
-            if item.get("artifact") and "diff_" in os.path.basename(item["artifact"]):
+            if item.get("artifact") and "diff_" in Path(item["artifact"]).name:
                 item["diff_b64"] = item["screenshot_b64"]
-                # We don't have the "current" non-diff screenshot here anymore if we replaced it
-                # But that's okay for PoC.
 
-            # If it was a NEW BASELINE, count it
-            if "NEW BASELINE" in str(
-                item.get("error", "")
-            ):  # Error field used for status in TUI sometimes
+            if "NEW BASELINE" in str(item.get("error", "")):
                 new_baselines += 1
 
         results_by_strategy[strategy].append(item)
 
-    # Load template
     template_path = Path(__file__).parent / "report_template.html"
     if not template_path.exists():
-        # Fallback to a very simple internal template if file missing
         html = f"<html><body><h1>Aether Lens Report</h1><pre>{json.dumps(results, indent=2)}</pre></body></html>"
     else:
         with open(template_path, "r") as f:
             template = f.read()
 
-        # Simple manual template rendering
-        # (Since we didn't add Jinja2 to dependencies yet)
         html = template
         html = html.replace(
             "{{ timestamp }}", datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -102,7 +94,6 @@ def generate_conformance_report(results, target_dir, strategies=None):
         html = html.replace("{{ failed_tests }}", str(failed_tests))
         html = html.replace("{{ new_baselines }}", str(new_baselines))
 
-        # Build the strategy blocks
         blocks_html = ""
         for strategy, tests in results_by_strategy.items():
             test_rows = ""
@@ -165,11 +156,7 @@ def generate_conformance_report(results, target_dir, strategies=None):
             </div>
             """
 
-        # Replace the marker
         html = html.replace("<!-- {{ CONTENT }} -->", blocks_html)
-
-        # The template has been cleaned up to use simple replacement markers.
-        pass
 
     with open(report_path, "w") as f:
         f.write(html)
@@ -189,7 +176,7 @@ def export_to_allure(results, target_dir):
         history_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, res["label"] + res["type"]))
 
         start_time = int(time.time() * 1000)
-        end_time = start_time + 100  # Mock duration
+        end_time = start_time + 100
 
         allure_result = {
             "uuid": test_uuid,
@@ -214,27 +201,26 @@ def export_to_allure(results, target_dir):
                 "trace": "",
             }
 
-        # Handle attachments
-        if res.get("artifact") and os.path.exists(res["artifact"]):
+        if res.get("artifact"):
             src_path = Path(res["artifact"])
-            ext = src_path.suffix.lower()
-            mime = "image/png" if ext == ".png" else "text/plain"
-            attachment_uuid = str(uuid.uuid4()) + ext
-            dst_path = allure_dir / attachment_uuid
+            if src_path.exists():
+                ext = src_path.suffix.lower()
+                mime = "image/png" if ext == ".png" else "text/plain"
+                attachment_uuid = str(uuid.uuid4()) + ext
+                dst_path = allure_dir / attachment_uuid
 
-            with open(src_path, "rb") as fsrc:
-                with open(dst_path, "wb") as fdst:
-                    while True:
-                        buf = fsrc.read(1024 * 1024)
-                        if not buf:
-                            break
-                        fdst.write(buf)
+                with open(src_path, "rb") as fsrc:
+                    with open(dst_path, "wb") as fdst:
+                        while True:
+                            buf = fsrc.read(1024 * 1024)
+                            if not buf:
+                                break
+                            fdst.write(buf)
 
-            allure_result["attachments"].append(
-                {"name": "Artifact", "source": attachment_uuid, "type": mime}
-            )
+                allure_result["attachments"].append(
+                    {"name": "Artifact", "source": attachment_uuid, "type": mime}
+                )
 
-        # Write the allure result file
         result_file = allure_dir / f"{test_uuid}-result.json"
         with open(result_file, "w") as f:
             json.dump(allure_result, f, indent=2)
@@ -255,11 +241,13 @@ def sync_results_to_allure_api(
         return False, "No allure-results directory found."
 
     results_data = []
-    for file in allure_dir.glob("*"):
-        if file.is_file():
-            with open(file, "rb") as f:
-                content = base64.b64encode(f.read()).decode("utf-8")
-                results_data.append({"file_name": file.name, "content_base64": content})
+    for f_path in allure_dir.glob("*"):
+        if f_path.is_file():
+            with open(f_path, "rb") as f_in:
+                content = base64.b64encode(f_in.read()).decode("utf-8")
+                results_data.append(
+                    {"file_name": f_path.name, "content_base64": content}
+                )
 
     if not results_data:
         return False, "No results to sync."
@@ -298,63 +286,55 @@ class KubernetesAllureProvider:
         self.endpoint_url = f"http://localhost:{port}"
 
     async def start(self):
-        import subprocess
-
         self.pod_name = f"allure-dash-{uuid.uuid4().hex[:8]}"
         console.print(
             f" -> [Allure] Spawning ephemeral Allure Dashboard pod/{self.pod_name}...",
             style="dim",
         )
         try:
-            # Simple run command, we don't need a full deployment for ephemeral use
-            subprocess.run(
-                [
-                    "kubectl",
-                    "run",
-                    self.pod_name,
-                    "--image=frankescobar/allure-docker-service:latest",
-                    f"--namespace={self.namespace}",
-                    "--port=5050",
-                    "--env=CHECK_RESULTS_EVERY_SECONDS=3",
-                    "--env=KEEP_HISTORY=1",
-                    "--restart=Never",
-                ],
-                check=True,
-                capture_output=True,
+            # kubectl run
+            proc = await asyncio.create_subprocess_exec(
+                "kubectl",
+                "run",
+                self.pod_name,
+                "--image=frankescobar/allure-docker-service:latest",
+                f"--namespace={self.namespace}",
+                "--port=5050",
+                "--env=CHECK_RESULTS_EVERY_SECONDS=3",
+                "--env=KEEP_HISTORY=1",
+                "--restart=Never",
             )
+            await proc.wait()
 
             console.print(
                 " -> [Allure] Waiting for Dashboard to be ready...", style="dim"
             )
-            subprocess.run(
-                [
-                    "kubectl",
-                    "wait",
-                    "--for=condition=Ready",
-                    f"pod/{self.pod_name}",
-                    f"--namespace={self.namespace}",
-                    "--timeout=60s",
-                ],
-                check=True,
-                capture_output=True,
+            # kubectl wait
+            proc = await asyncio.create_subprocess_exec(
+                "kubectl",
+                "wait",
+                "--for=condition=Ready",
+                f"pod/{self.pod_name}",
+                f"--namespace={self.namespace}",
+                "--timeout=60s",
             )
+            await proc.wait()
 
             console.print(
                 f" -> [Allure] Port-forwarding {self.pod_name} 5050 -> {self.port}...",
                 style="dim",
             )
-            self._pf_process = subprocess.Popen(
-                [
-                    "kubectl",
-                    "port-forward",
-                    f"pod/{self.pod_name}",
-                    f"{self.port}:5050",
-                    f"--namespace={self.namespace}",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+            # Port forward (background)
+            self._pf_process = await asyncio.create_subprocess_exec(
+                "kubectl",
+                "port-forward",
+                f"pod/{self.pod_name}",
+                f"{self.port}:5050",
+                f"--namespace={self.namespace}",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
             )
-            time.sleep(2)
+            await asyncio.sleep(2)
             return self.endpoint_url
 
         except Exception as e:
@@ -363,11 +343,8 @@ class KubernetesAllureProvider:
             raise
 
     async def stop(self):
-        import subprocess
-
         if self._pf_process:
             self._pf_process.terminate()
-            self._pf_process.wait()
             self._pf_process = None
 
         if self.pod_name:
@@ -375,23 +352,23 @@ class KubernetesAllureProvider:
                 f" -> [Allure] Cleaning up Dashboard pod/{self.pod_name}...",
                 style="dim",
             )
-            subprocess.run(
-                [
-                    "kubectl",
-                    "delete",
-                    "pod",
-                    self.pod_name,
-                    f"--namespace={self.namespace}",
-                    "--force",
-                    "--grace-period=0",
-                ],
-                capture_output=True,
+            proc = await asyncio.create_subprocess_exec(
+                "kubectl",
+                "delete",
+                "pod",
+                self.pod_name,
+                f"--namespace={self.namespace}",
+                "--force",
+                "--grace-period=0",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
             )
+            await proc.wait()
             self.pod_name = None
 
 
 class DockerAllureProvider:
-    """Handles Allure Dashboard lifecycle in Docker."""
+    """Handles Allure Dashboard lifecycle in Docker using SDK."""
 
     def __init__(self, port=5050):
         self.port = port
@@ -399,19 +376,24 @@ class DockerAllureProvider:
         self.endpoint_url = f"http://localhost:{port}"
 
     async def start(self):
-        import docker
+        if not DockerClient:
+            return None
 
         console.print(
             f" -> [Allure] Ensuring Allure Dashboard (Docker) on port {self.port}...",
             style="dim",
         )
         try:
-            client = docker.from_env()
+            client = DockerClient()
 
-            # Check if container exists
-            try:
-                container = client.containers.get(self.container_name)
-                if container.status == "running":
+            # Check if container exists via SDK
+            containers = await asyncio.to_thread(client.container.list, all=True)
+            target = next(
+                (c for c in containers if c.name == self.container_name), None
+            )
+
+            if target:
+                if target.state.status == "running":
                     console.print(
                         f" -> [Allure] Dashboard already running at {self.endpoint_url}",
                         style="dim",
@@ -419,30 +401,30 @@ class DockerAllureProvider:
                     return self.endpoint_url
 
                 # Exists but stopped
-                container.start()
+                await asyncio.to_thread(client.container.start, target)
                 console.print(
                     f" -> [Allure] Dashboard started at {self.endpoint_url}",
                     style="dim",
                 )
                 return self.endpoint_url
 
-            except docker.errors.NotFound:
-                # Create new
-                client.containers.run(
-                    "frankescobar/allure-docker-service:latest",
-                    name=self.container_name,
-                    detach=True,
-                    ports={"5050/tcp": self.port},
-                    environment={
-                        "CHECK_RESULTS_EVERY_SECONDS": "3",
-                        "KEEP_HISTORY": "1",
-                    },
-                )
-                console.print(
-                    f" -> [Allure] Dashboard created and started at {self.endpoint_url}",
-                    style="dim",
-                )
-                return self.endpoint_url
+            # Create new
+            await asyncio.to_thread(
+                client.container.run,
+                "frankescobar/allure-docker-service:latest",
+                name=self.container_name,
+                detach=True,
+                publish=[(self.port, 5050)],
+                envs={
+                    "CHECK_RESULTS_EVERY_SECONDS": "3",
+                    "KEEP_HISTORY": "1",
+                },
+            )
+            console.print(
+                f" -> [Allure] Dashboard created and started at {self.endpoint_url}",
+                style="dim",
+            )
+            return self.endpoint_url
 
         except Exception as e:
             console.print(
@@ -451,6 +433,4 @@ class DockerAllureProvider:
             return None
 
     async def stop(self):
-        # We might not want to kill it every time to keep history,
-        # but providing the method for completeness.
         pass

@@ -1,5 +1,5 @@
 import json
-import os
+from pathlib import Path
 
 
 class InitService:
@@ -14,7 +14,7 @@ class InitService:
         """
         Generates a default aether-lens.config.json.
         """
-        config_path = os.path.join(target_dir, "aether-lens.config.json")
+        config_path = Path(target_dir) / "aether-lens.config.json"
 
         config = {
             "strategy": strategy,
@@ -34,14 +34,15 @@ class InitService:
         }
         config.update(kwargs)
 
+        config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
 
-        return config_path
+        return str(config_path)
 
     def update_config(self, target_dir, updates):
-        config_path = os.path.join(target_dir, "aether-lens.config.json")
-        if not os.path.exists(config_path):
+        config_path = Path(target_dir) / "aether-lens.config.json"
+        if not config_path.exists():
             return self.generate_default_config(target_dir, **updates)
 
         with open(config_path, "r") as f:
@@ -52,4 +53,4 @@ class InitService:
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
 
-        return config_path
+        return str(config_path)

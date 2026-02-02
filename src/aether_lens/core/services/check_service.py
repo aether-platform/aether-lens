@@ -1,6 +1,6 @@
+import asyncio
 import json
-import os
-import subprocess
+from pathlib import Path
 
 from rich.console import Console
 
@@ -15,7 +15,7 @@ class CheckService:
         if self.verbose:
             console.print(msg, style=style)
 
-    def check_prerequisites(self, target_dir="."):
+    async def check_prerequisites(self, target_dir="."):
         """
         Core logic to check environment and configuration.
         Returns: dict with check results
@@ -29,8 +29,8 @@ class CheckService:
         self.log("[bold blue]Running Prerequisite Checks...[/bold blue]")
 
         # 1. Config Check
-        config_path = os.path.join(target_dir, "aether-lens.config.json")
-        if not os.path.exists(config_path):
+        config_path = Path(target_dir) / "aether-lens.config.json"
+        if not config_path.exists():
             self.log(f"[yellow]⚠ Config not found at {config_path}[/yellow]")
             results["config"]["status"] = "missing"
         else:
@@ -58,9 +58,11 @@ class CheckService:
                     # Check tools based on config
                     browser_strategy = config.get("browser_strategy", "local")
                     if browser_strategy == "docker":
-                        self._check_tool(results, "docker", "docker --version")
+                        await self._check_tool(results, "docker", "docker --version")
                     elif browser_strategy in ["kubernetes", "inpod", "k8s"]:
-                        self._check_tool(results, "kubectl", "kubectl version --client")
+                        await self._check_tool(
+                            results, "kubectl", "kubectl version --client"
+                        )
 
             except json.JSONDecodeError as e:
                 self.log(f"[red]✖ Config JSON Error: {e}[/red]")
@@ -68,9 +70,9 @@ class CheckService:
                 results["valid"] = False
 
         # 2. Common Tools Check
-        self._check_tool(results, "node", "node --version")
-        self._check_tool(results, "npm", "npm --version", critical=False)
-        self._check_tool(results, "git", "git --version")
+        await self._check_tool(results, "node", "node --version")
+        await self._check_tool(results, "npm", "npm --version", critical=False)
+        await self._check_tool(results, "git", "git --version")
 
         if results["valid"]:
             self.log("\n[bold green]All checks passed![/bold green]")
@@ -81,18 +83,20 @@ class CheckService:
 
         return results
 
-    def _check_tool(self, results, tool_name, check_cmd, critical=True):
+    async def _check_tool(self, results, tool_name, check_cmd, critical=True):
         try:
-            subprocess.run(
+            proc = await asyncio.create_subprocess_shell(
                 check_cmd,
-                shell=True,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
             )
-            self.log(f"[green]✔ Tool '{tool_name}' found[/green]")
-            results["tools"][tool_name] = True
-        except subprocess.CalledProcessError:
+            await proc.wait()
+            if proc.returncode == 0:
+                self.log(f"[green]✔ Tool '{tool_name}' found[/green]")
+                results["tools"][tool_name] = True
+            else:
+                raise RuntimeError("Tool failed")
+        except Exception:
             style = "red" if critical else "yellow"
             msg = f"[{style}]✖ Tool '{tool_name}' not found or failed[/{style}]"
             self.log(msg)
