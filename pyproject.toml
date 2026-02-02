@@ -23,6 +23,7 @@ dependencies = [
     "textual",
     "logfire",
     "pydantic>=2.0.0",
+    "python-on-whales",
 ]
 
 [project.optional-dependencies]

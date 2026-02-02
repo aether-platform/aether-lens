@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import os
-import shutil
 
 from PIL import Image
 from playwright.async_api import async_playwright
@@ -87,7 +86,13 @@ class VisualTestRunner:
         await page.screenshot(path=current_path, full_page=True)
 
         if not os.path.exists(baseline_path):
-            shutil.copy(current_path, baseline_path)
+            with open(current_path, "rb") as fsrc:
+                with open(baseline_path, "wb") as fdst:
+                    while True:
+                        buf = fsrc.read(1024 * 1024)
+                        if not buf:
+                            break
+                        fdst.write(buf)
             return True, "Baseline created", baseline_path
 
         # Compare

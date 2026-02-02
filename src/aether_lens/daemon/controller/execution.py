@@ -2,12 +2,16 @@ import asyncio
 import json
 import os
 import platform
-import shutil
 import subprocess
 import time
 import uuid
 from pathlib import Path
 from typing import Tuple
+
+try:
+    from python_on_whales import DockerClient
+except ImportError:
+    DockerClient = None
 
 import httpx
 import logfire
@@ -103,11 +107,35 @@ class ExecutionController:
         return True
 
     async def _start_via_sdk(self, command: str, cwd: str = None):
-        """Placeholder for SDK-based orchestration (e.g. docker-py)."""
+        """Start a service via the Python-on-Whales SDK."""
+        if not DockerClient:
+            console.print(
+                "    - [red]Error:[/red] 'python-on-whales' library not installed. Falling back to CLI."
+            )
+            return self.start_background_process(command, cwd=cwd)
+
         console.print(
-            "    - [yellow]SDK strategy requested but falling back to CLI (not fully implemented).[/yellow]"
+            "    - [cyan][SDK][/cyan] Orchestrating via Python-on-Whales SDK..."
         )
-        return self.start_background_process(command, cwd=cwd)
+        try:
+            docker_client = DockerClient()
+
+            if "compose" in command:
+                action = "up"
+                if "down" in command:
+                    action = "down"
+
+                if action == "up":
+                    await asyncio.to_thread(docker_client.compose.up, detach=True)
+                else:
+                    await asyncio.to_thread(docker_client.compose.down)
+
+                return True
+
+            return self.start_background_process(command, cwd=cwd)
+        except Exception as e:
+            console.print(f"    - [red]SDK Error:[/red] {e}")
+            return None
 
     def start_background_process(self, command, cwd=None):
         """Start a background process using the configured strategy."""
@@ -130,33 +158,41 @@ class ExecutionController:
             return None
 
     def _check_tool_presence(self, command: str) -> Tuple[bool, str]:
-        """Check if the first command in the string is likely available."""
+        """Check if the required tool is available. (V2 only, os-based)"""
         if not command:
             return True, ""
 
         parts = command.split()
         first_word = parts[0]
 
-        # Check for single-word commands (V1 or generic)
-        if shutil.which(first_word):
-            return True, ""
-
-        # Fallback check for Docker Compose V2 when docker-compose is missing
-        if first_word == "docker-compose":
-            if shutil.which("docker"):
-                # Docker CLI exists, we can likely translate to 'docker compose'
+        # Standard check for docker/docker-compose -> docker compose
+        if first_word in ["docker-compose", "docker"]:
+            if self._find_executable("docker"):
                 return True, ""
             return (
                 False,
-                "Neither 'docker-compose' nor 'docker' found. Please install Docker.",
+                "Docker NOT found. Please install Docker (V2 support required).",
             )
 
-        # Explicit check for 'docker compose'
-        if first_word == "docker" and len(parts) > 1 and parts[1] == "compose":
-            if shutil.which("docker"):
-                return True, ""
+        # Generic check for other tools
+        if self._find_executable(first_word):
+            return True, ""
 
         return False, f"Command '{first_word}' not found in PATH."
+
+    def _find_executable(self, name):
+        """Replacement for shutil.which using only os module."""
+        path = os.environ.get("PATH", os.defpath)
+        for directory in path.split(os.pathsep):
+            directory = directory.strip('"')
+            file_path = os.path.join(directory, name)
+            if os.path.isfile(file_path) and os.access(file_path, os.X_OK):
+                return file_path
+            if platform.system() == "Windows" and not name.lower().endswith(".exe"):
+                exe_path = file_path + ".exe"
+                if os.path.isfile(exe_path) and os.access(exe_path, os.X_OK):
+                    return exe_path
+        return None
 
     def load_config(self, target_dir, overrides=None):
         config_path = os.path.join(target_dir, "aether-lens.config.json")

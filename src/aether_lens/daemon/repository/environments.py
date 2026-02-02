@@ -2,6 +2,11 @@ import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, Tuple
 
+try:
+    from python_on_whales import DockerClient
+except ImportError:
+    DockerClient = None
+
 
 class RuntimeEnvironment(ABC):
     @abstractmethod
@@ -33,39 +38,34 @@ class DockerEnvironment(RuntimeEnvironment):
     def __init__(self, service_name: str, compose_file: str = "docker-compose.yml"):
         self.service_name = service_name
         self.compose_file = compose_file
-        # Standardization: Always use modern 'docker compose' (V2)
-        self._compose_cmd = "docker compose"
+        self._client = None
+
+    def _get_client(self):
+        if not self._client:
+            if not DockerClient:
+                raise ImportError(
+                    "The 'python-on-whales' library is required for DockerEnvironment."
+                )
+            self._client = DockerClient()
+        return self._client
 
     async def run_command(self, command: str, cwd: str = None) -> Tuple[bool, str, Any]:
-        full_command = (
-            f'{self._compose_cmd} exec -T {self.service_name} sh -c "{command}"'
-        )
-        success, output, artifact = await self._safe_exec(full_command)
-
-        if not success and "not found" in output.lower():
-            if "docker" in output.lower():
-                output = (
-                    "Docker Compose not found. Please ensure Docker (V2) is installed. gateway. "
-                    "Aether Lens has dropped support for legacy 'docker-compose' (V1)."
-                )
-
-        return success, output, artifact
-
-    async def _safe_exec(self, full_command: str) -> Tuple[bool, str, Any]:
+        """Execute a command inside a Docker container using the Python-on-Whales SDK."""
         try:
-            proc = await asyncio.create_subprocess_shell(
-                full_command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            client = self._get_client()
+
+            # Using SDK for execution
+            output = await asyncio.to_thread(
+                client.execute,
+                container=self.service_name,
+                command=["sh", "-c", command],
+                workdir=cwd,
             )
-            stdout, stderr = await proc.communicate()
-            return (
-                proc.returncode == 0,
-                stdout.decode().strip() + "\n" + stderr.decode().strip(),
-                None,
-            )
+
+            return True, output, None
+
         except Exception as e:
-            return False, str(e), None
+            return False, f"Docker SDK Error: {e}", None
 
 
 class K8sEnvironment(RuntimeEnvironment):

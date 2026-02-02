@@ -1,7 +1,6 @@
 import base64
 import json
 import os
-import shutil
 import time
 import uuid
 from datetime import datetime
@@ -223,7 +222,13 @@ def export_to_allure(results, target_dir):
             attachment_uuid = str(uuid.uuid4()) + ext
             dst_path = allure_dir / attachment_uuid
 
-            shutil.copy(src_path, dst_path)
+            with open(src_path, "rb") as fsrc:
+                with open(dst_path, "wb") as fdst:
+                    while True:
+                        buf = fsrc.read(1024 * 1024)
+                        if not buf:
+                            break
+                        fdst.write(buf)
 
             allure_result["attachments"].append(
                 {"name": "Artifact", "source": attachment_uuid, "type": mime}
