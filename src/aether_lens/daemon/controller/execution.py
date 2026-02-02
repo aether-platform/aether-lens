@@ -1,11 +1,12 @@
 import asyncio
 import json
 import platform
+import re
 import time
 import uuid
 from os import environ
 from pathlib import Path
-from typing import Tuple
+from typing import List, Optional, Tuple
 
 try:
     from python_on_whales import DockerClient
@@ -31,6 +32,27 @@ from aether_lens.daemon.repository.environments import (
 from aether_lens.daemon.repository.executor import TestExecutor
 
 console = Console(stderr=True)
+
+
+class ComposeProjectHandle:
+    """Handle for an SDK-managed Docker Compose project."""
+
+    def __init__(self, docker_client, config_files: Optional[List[str]] = None):
+        self.docker_client = docker_client
+        self.config_files = config_files
+
+    def stop(self):
+        """Synchronously stop the compose project (called by LifecycleRegistry)."""
+        try:
+            # We don't have a direct sync wrapper if we are in a thread,
+            # but python-on-whales calls are sync.
+            self.docker_client.compose.down(config_files=self.config_files)
+        except Exception as e:
+            console.print(f"    - [yellow]Warning: SDK Cleanup failed:[/yellow] {e}")
+
+    def terminate(self):
+        """Alias for stop."""
+        self.stop()
 
 
 class ExecutionController:
@@ -67,7 +89,11 @@ class ExecutionController:
             msg = f" -> [Management] Starting service: [cyan]{name}[/cyan] ({command}) [Strategy: {svc_strategy}]"
             console.print(msg)
 
-            # Pre-check tool presence
+            # NEW: Normalize binary name early to favor V2 (docker compose)
+            if command.startswith("docker-compose"):
+                command = command.replace("docker-compose", "docker compose", 1)
+
+            # Pre-check tool presence using the normalized command
             tool_ok, tool_err = self._check_tool_presence(command)
             if not tool_ok:
                 err_msg = f"    - [red]Error:[/red] {tool_err}. Please ensure the tool is installed."
@@ -122,7 +148,26 @@ class ExecutionController:
             if "compose" in command:
                 # Use the SDK to manage compose projects.
                 project_dir = Path(cwd) if cwd else Path.cwd()
-                compose_files = [str(project_dir / "docker-compose.yml")]
+                compose_files = []
+
+                # Smart discovery of compose files
+                # 1. Check for -f/--file in command
+                m = re.search(r"-f\s+([^\s]+)", command) or re.search(
+                    r"--file\s+([^\s]+)", command
+                )
+                if m:
+                    compose_files = [m.group(1)]
+                else:
+                    # 2. Check standard locations
+                    for f in [
+                        "docker-compose.yml",
+                        "docker-compose.yaml",
+                        "compose.yml",
+                        "compose.yaml",
+                    ]:
+                        if (project_dir / f).exists():
+                            compose_files.append(str(project_dir / f))
+                            break
 
                 action = "up"
                 if "down" in command:
@@ -132,18 +177,23 @@ class ExecutionController:
                     await asyncio.to_thread(
                         docker_client.compose.up,
                         detach=True,
-                        config_files=compose_files,
+                        config_files=compose_files if compose_files else None,
                     )
+                    # Return a handle for LifecycleRegistry to cleanup later
+                    return ComposeProjectHandle(docker_client, compose_files)
                 else:
                     await asyncio.to_thread(
-                        docker_client.compose.down, config_files=compose_files
+                        docker_client.compose.down,
+                        config_files=compose_files if compose_files else None,
                     )
-                return True
+                    return True
 
             return await self.start_background_process(command, cwd=cwd)
         except Exception as e:
-            console.print(f"    - [red]SDK Error:[/red] {e}")
-            return None
+            console.print(
+                f"    - [yellow]SDK failed: {e}. Falling back to CLI.[/yellow]"
+            )
+            return await self.start_background_process(command, cwd=cwd)
 
     async def start_background_process(self, command, cwd=None):
         """Start a background process using asyncio."""
@@ -162,16 +212,32 @@ class ExecutionController:
         if not command:
             return True, ""
 
-        first_word = command.split()[0]
+        words = command.split()
+        first_word = words[0]
+
+        # Handling 'docker compose' as a single tool concept
+        if first_word == "docker" and len(words) > 1 and words[1] == "compose":
+            if self._find_executable("docker"):
+                return True, ""
+            return False, "Command 'docker' (required for 'docker compose') not found."
+
         if self._find_executable(first_word):
             return True, ""
         return False, f"Command '{first_word}' not found in PATH."
 
     def _find_executable(self, name):
         """Path-based replacement for which."""
+        if not name:
+            return None
+
+        # Handle absolute or relative paths directly
+        path_name = Path(name)
+        if path_name.is_absolute() and path_name.exists() and not path_name.is_dir():
+            return str(path_name)
+
         env_path = environ.get("PATH", "")
         # Handle platform-specific path separators
-        sep = Path("").drive + ";" if platform.system() == "Windows" else ":"
+        sep = ";" if platform.system() == "Windows" else ":"
         for p in env_path.split(sep):
             if not p:
                 continue

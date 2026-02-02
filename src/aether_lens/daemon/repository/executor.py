@@ -116,8 +116,8 @@ class TestExecutor:
                     error = "sonar-scanner not found. Please ensure it is installed and in your PATH."
                 elif "docker-compose" in command or "docker compose" in command:
                     error = (
-                        "Docker Compose not found. Please ensure Docker is installed and 'docker-compose' or "
-                        "'docker compose' is available in your PATH."
+                        "Docker Compose not found. Please ensure Docker is installed and "
+                        "'docker compose' (V2) or 'docker-compose' is available in your PATH."
                     )
                 elif "kubectl" in command:
                     error = "kubectl not found. Please ensure Kubernetes CLI is installed and in your PATH."
