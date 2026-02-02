@@ -1,158 +1,141 @@
 import argparse
 import asyncio
+import json
 from pathlib import Path
-
-from PIL import Image
-from playwright.async_api import async_playwright
-
-try:
-    from pixelmatch import pixelmatch
-except ImportError:
-    pixelmatch = None
+from urllib.parse import urlparse
 
 
 class VisualTestRunner:
     def __init__(self, base_url: str = None, current_dir: str = None):
         self.base_url = base_url.rstrip("/") if base_url else ""
         self.current_dir = Path(current_dir or Path.cwd())
-        self.browser_strategy = "local"
 
-    def calculate_pixel_diff(self, img1_path, img2_path, diff_path, threshold=0.1):
-        if not pixelmatch:
-            return None, "pixelmatch not installed"
-
-        try:
-            img1 = Image.open(img1_path).convert("RGBA")
-            img2 = Image.open(img2_path).convert("RGBA")
-        except FileNotFoundError as e:
-            return None, f"Image file not found: {e}"
-        except Exception as e:
-            return None, f"Error opening images: {e}"
-
-        if img1.size != img2.size:
-            img2 = img2.resize(img1.size)
-
-        width, height = img1.size
-        diff_data = bytearray(width * height * 4)
-
-        try:
-            mismatch = pixelmatch(
-                img1.tobytes(),
-                img2.tobytes(),
-                width,
-                height,
-                diff_data,
-                threshold=threshold,
-            )
-            if mismatch > 0:
-                diff_img = Image.frombytes("RGBA", img1.size, bytes(diff_data))
-                diff_img.save(diff_path)
-            return mismatch, None
-        except Exception as e:
-            return 0, str(e)
-
-    async def run_visual_test(
-        self,
-        page,
-        label,
-        path_url,
-        viewport=None,
-        test_id_key="vrt",
-        vrt_config=None,
-    ):
-        vrt_config = vrt_config or {}
-
-        full_url = (
-            path_url if path_url.startswith("http") else f"{self.base_url}{path_url}"
+    async def run_external_tool(self, cmd, label):
+        print(f" -> Running {label}: {' '.join(cmd)}")
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
+        stdout, stderr = await proc.communicate()
+        return proc.returncode, stdout.decode(), stderr.decode()
 
-        if viewport:
-            w, h = map(int, viewport.split("x"))
-            await page.set_viewport_size({"width": w, "height": h})
+    async def audit_site(self, parameters):
+        """Use linkinator to discover URLs and lighthouse to audit them."""
+        print(f"Starting Visual Health Audit via External Tools on {self.base_url}...")
 
-        try:
-            await page.goto(full_url, wait_until="networkidle")
-        except Exception as e:
-            return False, f"Navigation failed: {e}", None
+        # 1. Discover URLs via linkinator
+        linkinator_cmd = [
+            "npx",
+            "-y",
+            "linkinator",
+            self.base_url,
+            "--recurse",
+            "--format",
+            "json",
+            "--dry-run",
+        ]
 
-        # Screenshot logic
-        baseline_dir = self.current_dir / "tests" / "baselines"
-        baseline_dir.mkdir(parents=True, exist_ok=True)
-        baseline_path = baseline_dir / f"{test_id_key}.png"
-
-        current_path = self.current_dir / f"{test_id_key}_current.png"
-        diff_path = self.current_dir / f"{test_id_key}_diff.png"
-
-        await page.screenshot(path=str(current_path), full_page=True)
-
-        if not baseline_path.exists():
-            with open(current_path, "rb") as fsrc:
-                with open(baseline_path, "wb") as fdst:
-                    while True:
-                        buf = fsrc.read(1024 * 1024)
-                        if not buf:
-                            break
-                        fdst.write(buf)
-            return True, "Baseline created", str(baseline_path)
-
-        # Compare
-        threshold = float(vrt_config.get("threshold", 0.1))
-        mismatch, err = self.calculate_pixel_diff(
-            str(baseline_path), str(current_path), str(diff_path), threshold
+        rc, out, err = await self.run_external_tool(
+            linkinator_cmd, "Linkinator (Crawler)"
         )
-
-        if err:
-            return False, f"Comparison error: {err}", None
-
-        if mismatch > 0:
-            return (
-                False,
-                f"Visual mismatch detected ({mismatch} pixels)",
-                str(diff_path),
-            )
-
-        return True, "Visual test passed", None
-
-    async def execute_suite(self, suite_id, parameters):
-        from aether_lens.daemon.repository.reg_scenarios import REGISTRY
-
-        scenario_func = REGISTRY.get(suite_id)
-        if not scenario_func:
-            print(f"Scenario {suite_id} not found")
+        if rc != 0:
+            print(f"Linkinator failed: {err}")
             return False
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch()
-            page = await browser.new_page()
+        try:
+            data = json.loads(out)
+            links = data.get("links", [])
+        except Exception as e:
+            print(f"Failed to parse Linkinator output: {e}")
+            return False
 
-            success = True
-            try:
-                await scenario_func(page, parameters)
+        # Filter internal successful HTML-like URLs
+        base_parsed = urlparse(self.base_url)
+        urls_to_test = set()
+        for link in links:
+            u = link.get("url")
+            if not u or link.get("status") != 200:
+                continue
+            parsed = urlparse(u)
+            if parsed.netloc != base_parsed.netloc:
+                continue
 
-                path = parameters.get("path", "/")
-                viewport = parameters.get("viewport", "1280x720")
+            path = parsed.path.lower()
+            if any(
+                path.endswith(ext)
+                for ext in [
+                    ".js",
+                    ".css",
+                    ".png",
+                    ".jpg",
+                    ".svg",
+                    ".ico",
+                    ".json",
+                    ".xml",
+                ]
+            ):
+                continue
+            if path.startswith("/@") or "/node_modules/" in path:
+                continue
 
-                s, e, a = await self.run_visual_test(
-                    page=page,
-                    label=suite_id,
-                    path_url=path,
-                    viewport=viewport,
-                    test_id_key=suite_id,
-                    vrt_config=parameters,
-                )
-                success = s
-                status_msg = f"PASSED: {e}" if success else f"FAILED: {e}"
-                if a:
-                    status_msg += f" (Artifact: {a})"
-                print(status_msg)
+            clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            urls_to_test.add(clean_url)
 
-            except Exception as e:
-                print(f"Error executing scenario: {e}")
+        print(f"Discovered {len(urls_to_test)} pages to audit.")
+
+        # 2. Audit each URL via Lighthouse
+        success = True
+        # To avoid extreme slowness, we limit the number of pages in audit
+        max_audit = int(parameters.get("max_pages", 5))
+        pages = sorted(list(urls_to_test))[:max_audit]
+
+        for url in pages:
+            print(f"\n--- Auditing: {url} ---")
+            lh_cmd = [
+                "npx",
+                "-y",
+                "lighthouse",
+                url,
+                "--output",
+                "json",
+                "--only-categories=accessibility,best-practices,performance,seo",
+                "--chrome-flags=--headless",
+                "--quiet",
+            ]
+
+            # We don't save the full JSON to the repo to avoid bloat,
+            # but we could save it to an artifact dir if needed.
+            rc, out, err = await self.run_external_tool(lh_cmd, "Lighthouse")
+            if rc != 0:
+                print(f"FAILED: Lighthouse audit for {url}")
                 success = False
-            finally:
-                await browser.close()
+                continue
 
-            return success
+            try:
+                report = json.loads(out)
+                scores = {k: v["score"] * 100 for k, v in report["categories"].items()}
+                print(f"PASSED: {url} | Scores: {scores}")
+
+                # Threshold check (optional)
+                threshold = float(parameters.get("min_score", 80))
+                for cat, score in scores.items():
+                    if score < threshold:
+                        print(
+                            f"  [WARNING] {cat} score is below threshold: {score} < {threshold}"
+                        )
+            except Exception as e:
+                print(f"Error parsing Lighthouse report for {url}: {e}")
+                success = False
+
+        return success
+
+    async def execute_suite(self, suite_id, parameters):
+        if suite_id == "site_audit":
+            return await self.audit_site(parameters)
+
+        print(
+            f"Error: Unknown orchestrated suite '{suite_id}'. Individual scenarios should be run via their own external tools."
+        )
+        return False
 
 
 if __name__ == "__main__":

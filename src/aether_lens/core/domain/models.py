@@ -54,6 +54,7 @@ class TestCase:
     label: str
     command: str
     description: Optional[str] = None
+    execution_env: Optional[str] = None
     tags: List[str] = None
 
     def __post_init__(self):

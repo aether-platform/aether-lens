@@ -527,8 +527,8 @@ class ExecutionController:
                 all_tests = [
                     {
                         "type": "command",
-                        "label": "Home Layout Check (Standard)",
-                        "command": "python3 -m aether_lens.core.runner layout_check",
+                        "label": "Visual Health Audit (Crawl)",
+                        "command": "python3 -m aether_lens.daemon.repository.runner site_audit",
                         "execution_env": "local",
                     }
                 ]

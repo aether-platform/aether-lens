@@ -11,16 +11,9 @@ from aether_lens.core.planning.ai import run_analysis
 logfire.configure(send_to_logfire="if-token-present")
 logfire.instrument_pydantic()
 
-# Initialize and wire container for MCP process
+# Initialize container for MCP process
 Container.validate_environment()
 container = Container()
-container.wire(
-    modules=[
-        "aether_lens.daemon.controller.execution",
-        "aether_lens.daemon.controller.watcher",
-        "aether_lens.daemon.loop_daemon",
-    ]
-)
 
 mcp = FastMCP("Aether Lens")
 
@@ -176,6 +169,18 @@ async def check_prerequisites(target_dir: str = "."):
     :param target_dir: The directory to check.
     """
     return await _check_prerequisites_impl(target_dir)
+
+
+# Wire the container after all functions are defined so @inject picks them up
+container.wire(
+    modules=[
+        "aether_lens.daemon.controller.execution",
+        "aether_lens.daemon.controller.watcher",
+        "aether_lens.daemon.loop_daemon",
+        "aether_lens.client.mcp.server",
+        "__main__",
+    ]
+)
 
 
 def main():

@@ -1,13 +1,15 @@
-- id: layout_check
-  label: "Home Layout Check"
-  description: "Verifies the layout of the home page"
-  command: "python3 -m aether_lens.core.runner layout_check --threshold 0.1"
-  tags: ["visual", "layout"]
+- id: site_audit
+  label: "Visual Health Audit (Crawl)"
+  description: "Crawl and audit all pages using Lighthouse & Linkinator"
+  command: "python3 -m aether_lens.daemon.repository.runner site_audit --min-score 80"
+  execution_env: "local"
+  tags: ["visual", "audit"]
 
 - id: login_valid
   label: "Login (Valid)"
-  description: "Verifies successful login flow"
-  command: "python3 -m aether_lens.core.runner login_scenario --threshold 0.1"
+  description: "Verifies successful login flow via Playwright"
+  command: "npx playwright test tests/login.spec.js"
+  execution_env: "local"
   tags: ["visual", "auth"]
 
 - id: build_check

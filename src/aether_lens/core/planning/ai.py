@@ -43,6 +43,7 @@ class TestPlanner:
                 label=test_def.get("label", test_def.get("id")),
                 command=test_def.get("command"),
                 description=test_def.get("description"),
+                execution_env=test_def.get("execution_env"),
                 tags=test_def.get("tags", []),
             )
 
@@ -52,6 +53,7 @@ class TestPlanner:
                     "label": t.label,
                     "command": t.command,
                     "description": t.description,
+                    "execution_env": t.execution_env,
                 }
             )
 
@@ -60,8 +62,8 @@ class TestPlanner:
             recommended_tests.append(
                 {
                     "type": "command",
-                    "label": "Home Layout Check (Standard)",
-                    "command": "python3 -m aether_lens.core.runner layout_check",
+                    "label": "Visual Health Audit (Crawl)",
+                    "command": "python3 -m aether_lens.daemon.repository.runner site_audit",
                     "execution_env": "local",
                 }
             )
