@@ -13,6 +13,7 @@ class AetherOrchestrator:
 
     def __init__(self, execution_ctrl: ExecutionController):
         self.execution_ctrl = execution_ctrl
+        self._watchers = {}  # target_dir -> observer
 
     async def start_background_process(self, command, cwd=None):
         return await self.execution_ctrl.start_background_process(command, cwd=cwd)
@@ -25,25 +26,31 @@ class AetherOrchestrator:
             url, timeout=timeout, event_emitter=event_emitter
         )
 
-    async def start_watch(self, target_dir: str, strategy="auto", use_tui=True):
+    async def start_watch(self, target_dir: str, strategy="auto", interactive=True):
         """Start a local watch-and-run loop."""
         target_path = Path(target_dir).resolve()
+        target_dir_str = str(target_path)
+
+        if target_dir_str in self._watchers:
+            return self._watchers[target_dir_str]
+
+        loop = asyncio.get_running_loop()
 
         async def _on_watch_change(path):
             await self.execution_ctrl.run_pipeline(
-                target_dir=str(target_path), strategy=strategy, use_tui=use_tui
+                target_dir=str(target_path), strategy=strategy, interactive=interactive
             )
 
         def on_change(path):
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(_on_watch_change(path))
-            except RuntimeError:
-                asyncio.run(_on_watch_change(path))
+            # No need for complex logic here, WatchController will handle thread-safety
+            # But we wrap it in a task just in case it's not a coroutine
+            loop.create_task(_on_watch_change(path))
 
         observer = start_watcher(
-            str(target_path), on_change, blocking=False, orchestrator=self
+            str(target_path), on_change, blocking=False, orchestrator=self, loop=loop
         )
+        self._watchers[target_dir_str] = observer
+
         if self.execution_ctrl.lifecycle_registry:
             self.execution_ctrl.lifecycle_registry.register(str(target_path), observer)
         return observer

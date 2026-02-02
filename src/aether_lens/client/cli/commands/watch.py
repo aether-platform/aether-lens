@@ -75,7 +75,7 @@ def watch(
             orchestrator = AetherOrchestrator(execution_service)
 
             await orchestrator.start_watch(
-                target_dir=target_dir, strategy=strategy, use_tui=False
+                target_dir=target_dir, strategy=strategy, interactive=False
             )
             console.print("[Lens Watch] Watching for changes... (Press Ctrl+C to stop)")
             try:
@@ -96,12 +96,13 @@ def watch(
             )
 
             async def run_logic():
+                loop = asyncio.get_running_loop()
                 await execution_service.run_pipeline(
                     target_dir=target_dir,
                     browser_url=browser_url,
                     strategy=strategy,
                     app_url=app_url,
-                    use_tui=True,
+                    interactive=True,
                     event_emitter=emitter,
                 )
 
@@ -111,17 +112,19 @@ def watch(
                     await execution_service.run_pipeline(
                         target_dir=target_dir,
                         strategy=strategy,
-                        use_tui=True,
+                        interactive=True,
                         event_emitter=emitter,
                         app_url=app_url,
                     )
 
                 def on_change(path):
-                    loop = asyncio.get_running_loop()
                     loop.create_task(_on_watch_change(path))
 
-                observer = start_watcher(target_dir, on_change, blocking=False)
-                execution_service.lifecycle_registry.register(target_dir, observer)
+                observer = start_watcher(
+                    target_dir, on_change, blocking=False, loop=loop
+                )
+                if execution_service.lifecycle_registry:
+                    execution_service.lifecycle_registry.register(target_dir, observer)
 
             app.run_logic_callback = lambda inst: run_logic()
             await app.run_async()

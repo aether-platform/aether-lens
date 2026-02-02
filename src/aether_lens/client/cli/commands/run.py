@@ -80,10 +80,10 @@ def run(
     asyncio.run(
         service.run_pipeline(
             target_dir=target,
+            interactive=False,
             browser_url=browser_url,
-            context="cli",
             strategy=strategy,
             app_url=app_url,
-            use_tui=True,
+            # event_emitter=emitter if not headless else None, # emitter is not defined in this scope
         )
     )

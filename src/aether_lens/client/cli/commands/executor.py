@@ -57,7 +57,7 @@ def executor(
                 context="executor",
                 strategy=strategy,
                 app_url=app_url,
-                use_tui=False,
+                interactive=False,
                 event_emitter=emitter,
             )
 

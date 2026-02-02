@@ -92,7 +92,7 @@ async def _run_pipeline_impl(
         browser_url=browser_url,
         context="mcp",
         strategy=strategy,
-        use_tui=False,
+        interactive=False,
     )
 
 
@@ -108,6 +108,26 @@ async def run_pipeline(
 
 @mcp.tool()
 @inject
+async def watch_project(
+    target_dir: str = ".",
+    strategy: str = "auto",
+    orchestrator=Provide[Container.orchestrator],
+    execution_service=Provide[Container.execution_service],
+):
+    """
+    Start watching for file changes and trigger the pipeline automatically (Non-blocking).
+
+    :param target_dir: The directory to watch.
+    :param strategy: AI analysis strategy to use.
+    """
+    await execution_service.run_pipeline(
+        target_dir=target_dir, strategy=strategy, interactive=False, auto_watch=True
+    )
+    return f"Pipeline execution started for {target_dir} with watch mode enabled."
+
+
+@mcp.tool()
+@inject
 async def start_lens_loop(
     target_dir: str,
     pod_name: str,
@@ -115,13 +135,13 @@ async def start_lens_loop(
     remote_path: str = "/app/project",
     browser_strategy: str = "inpod",
     browser_url: str = None,
-    execution_service=Provide[Container.execution_service],
+    orchestrator=Provide[Container.orchestrator],
 ):
     """
     Start the local Lens Loop daemon for a directory (Non-blocking).
-    This will watch for local changes in the background.
+    This will watch for local changes in the background and sync to remote.
     """
-    await execution_service.start_loop(
+    await orchestrator.start_loop(
         target_dir=target_dir,
         pod_name=pod_name,
         namespace=namespace,
@@ -158,6 +178,124 @@ async def _check_prerequisites_impl(
         return f"Checks Passed: {results}"
     else:
         return f"Checks Failed: {results}"
+
+
+@mcp.tool()
+async def get_pipeline_history(target_dir: str = ".", limit: int = 5):
+    """
+    Get the history of recent pipeline runs.
+
+    :param target_dir: The directory to check.
+    :param limit: Number of recent runs to return.
+    """
+    history_dir = Path(target_dir) / ".aether" / "history"
+    if not history_dir.exists():
+        return "No history found for this project."
+
+    files = sorted(history_dir.glob("run_*.json"), reverse=True)
+    results = []
+    for f in files[:limit]:
+        try:
+            with open(f, "r") as f_in:
+                data = json.load(f_in)
+                # Just return summary to avoid huge output
+                results.append(
+                    {
+                        "filename": f.name,
+                        "timestamp": data.get("timestamp"),
+                        "strategy": data.get("strategy"),
+                        "test_count": len(data.get("results", [])),
+                    }
+                )
+        except Exception:
+            continue
+
+    return results
+
+
+@mcp.tool()
+async def get_latest_insight(target_dir: str = "."):
+    """
+    Get detailed insights and scores from the latest pipeline run.
+    """
+    latest_path = Path(target_dir) / ".aether" / "history" / "latest.json"
+    if not latest_path.exists():
+        return "No recent results found. Run the pipeline first."
+
+    try:
+        with open(latest_path, "r") as f:
+            data = json.load(f)
+            return data
+    except Exception as e:
+        return f"Error reading results: {e}"
+
+
+@mcp.tool()
+async def get_allure_results(target_dir: str = "."):
+    """
+    Get Allure-compatible test results from the .aether/allure-results directory.
+    """
+    allure_dir = Path(target_dir) / ".aether" / "allure-results"
+    if not allure_dir.exists():
+        return "No Allure results found. Run the pipeline with Allure strategy enabled."
+
+    results = []
+    # Read up to 20 recent result files
+    files = sorted(
+        allure_dir.glob("*-result.json"), key=lambda x: x.stat().st_mtime, reverse=True
+    )
+    for f in files[:20]:
+        try:
+            with open(f, "r") as f_in:
+                results.append(json.load(f_in))
+        except Exception:
+            continue
+
+    return results
+
+
+@mcp.tool()
+async def get_allure_summary(target_dir: str = "."):
+    """
+    Get a summary of Allure test results, grouped by status and suite.
+    """
+    allure_dir = Path(target_dir) / ".aether" / "allure-results"
+    if not allure_dir.exists():
+        return "No Allure results found."
+
+    summary = {"total": 0, "passed": 0, "failed": 0, "skipped": 0, "suites": {}}
+
+    files = list(allure_dir.glob("*-result.json"))
+    for f in files:
+        try:
+            with open(f, "r") as f_in:
+                data = json.load(f_in)
+                summary["total"] += 1
+                status = data.get("status", "unknown")
+                if status == "passed":
+                    summary["passed"] += 1
+                elif status == "failed":
+                    summary["failed"] += 1
+                else:
+                    summary["skipped"] += 1
+
+                suite = "unknown"
+                for label in data.get("labels", []):
+                    if label.get("name") == "suite":
+                        suite = label.get("value")
+
+                if suite not in summary["suites"]:
+                    summary["suites"][suite] = {"total": 0, "passed": 0, "failed": 0}
+
+                summary["suites"][suite]["total"] += 1
+                if status == "passed":
+                    summary["suites"][suite]["passed"] += 1
+                elif status == "failed":
+                    summary["suites"][suite]["failed"] += 1
+        except Exception:
+            continue
+
+    return summary
 
 
 @mcp.tool()

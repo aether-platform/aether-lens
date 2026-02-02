@@ -34,12 +34,23 @@ class Container(containers.DeclarativeContainer):
         return CheckService()
 
     @staticmethod
-    def _create_execution_controller(config, test_runner, planner, **kwargs):
+    def _create_execution_controller(
+        config, test_runner, planner, lifecycle_registry, **kwargs
+    ):
         from aether_lens.daemon.controller.execution import ExecutionController
 
         return ExecutionController(
-            config=config, test_runner=test_runner, planner=planner
+            config=config,
+            test_runner=test_runner,
+            planner=planner,
+            lifecycle_registry=lifecycle_registry,
         )
+
+    @staticmethod
+    def _create_orchestrator(execution_ctrl, **kwargs):
+        from aether_lens.daemon.controller.orchestrator import AetherOrchestrator
+
+        return AetherOrchestrator(execution_ctrl=execution_ctrl)
 
     @staticmethod
     def _create_watch_controller(execution_ctrl, **kwargs):
@@ -100,12 +111,15 @@ class Container(containers.DeclarativeContainer):
     test_runner = providers.Factory(_create_test_runner, config=config.provider)
     test_planner = providers.Factory(_create_test_planner)
 
-    execution_service = providers.Factory(
+    execution_service = providers.Singleton(
         _create_execution_controller,
         config=config.provider,
         test_runner=test_runner,
         planner=test_planner,
         lifecycle_registry=lifecycle_registry,
+    )
+    orchestrator = providers.Singleton(
+        _create_orchestrator, execution_ctrl=execution_service
     )
     watch_service = providers.Factory(
         _create_watch_controller, execution_ctrl=execution_service

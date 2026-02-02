@@ -393,17 +393,17 @@ class ExecutionController:
     @logfire.instrument("Aether Lens Pipeline")
     async def run_pipeline(
         self,
-        target_dir=".",
-        browser_url=None,
-        context=None,
-        rp_url=None,
-        allure_dir=None,
-        strategy="auto",
-        custom_instruction=None,
-        use_tui: bool = True,
-        event_emitter: EventEmitter = None,
-        close_browser: bool = True,
+        target_dir: str,
+        browser_url: str = None,
+        strategy: str = "auto",
         app_url: str = None,
+        interactive: bool = False,
+        event_emitter: EventEmitter = None,
+        context: str = "watch",
+        environment: str = "local",
+        close_browser: bool = False,
+        auto_watch: bool = False,
+        custom_instruction: str = None,
     ):
         target_dir = str(Path(target_dir or ".").resolve())
 
@@ -416,6 +416,14 @@ class ExecutionController:
                 "strategy": strategy,
                 "app_url": app_url,
             }
+            if auto_watch and self.orchestrator:
+                # Avoid circular import
+                await self.orchestrator.start_watch(
+                    target_dir,
+                    strategy=strategy,
+                    interactive=interactive,
+                    event_emitter=event_emitter,
+                )
             config = self.load_config(target_dir, overrides=overrides)
 
             exec_env_type = config.get("execution_env", "local")
@@ -555,7 +563,7 @@ class ExecutionController:
                             {
                                 "type": "command",
                                 "label": "Quality Guard (SonarQube)",
-                                "command": "sonar-scanner",
+                                "command": "npx -y sonarqube-scanner",
                                 "execution_env": "local",
                             }
                         )
@@ -569,7 +577,7 @@ class ExecutionController:
                 target_dir,
                 event_emitter,
                 app_url,
-                use_tui,
+                interactive,
                 environment=env_runner,
             )
 
