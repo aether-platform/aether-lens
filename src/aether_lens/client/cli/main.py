@@ -16,6 +16,7 @@ logfire.configure(send_to_logfire="if-token-present")
 logfire.instrument_pydantic()
 
 # Initialize container and wire to relevant modules
+Container.validate_environment()
 container = Container()
 container.wire(
     modules=[

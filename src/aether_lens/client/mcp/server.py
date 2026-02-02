@@ -12,6 +12,7 @@ logfire.configure(send_to_logfire="if-token-present")
 logfire.instrument_pydantic()
 
 # Initialize and wire container for MCP process
+Container.validate_environment()
 container = Container()
 container.config.from_dict({"browser_strategy": "local", "headless": True})
 container.wire(

@@ -117,6 +117,10 @@ class PipelineDashboard(App):
                 yield Label("[bold]Recommended Tests[/bold]")
                 yield DataTable(id="test-table")
             with Vertical(id="log-container"):
+                yield Label(
+                    "[bold]Current Pipeline Phase:[/bold] [yellow]Initializing...[/yellow]",
+                    id="phase-status",
+                )
                 yield Label("[bold]Execution Logs[/bold]")
                 yield Log(id="execution-log")
         yield Label(
@@ -231,7 +235,12 @@ class PipelineDashboard(App):
                 test_status=display_status,
             )
         elif etype == "log":
-            self.log_message(event_data.get("message", ""))
+            msg = event_data.get("message", "")
+            if "PHASE:" in msg:
+                # Update phase status label
+                phase_name = msg.split("PHASE:")[1].split("=")[0].strip()
+                self.update_phase_status(phase_name)
+            self.log_message(msg)
         elif etype == "result":
             self.show_completion_message()
 
@@ -276,210 +285,6 @@ class PipelineDashboard(App):
                 if not line:
                     break
                 try:
-                    event = json.loads(line.decode().strip())
-                    # Assuming 'app' refers to 'self' (the PipelineDashboard instance)
-                    # and event types like TestStartedEvent, TestProgressEvent, TestFinishedEvent, PipelineLogEvent are defined elsewhere.
-                    # This part of the snippet is syntactically incomplete as a direct replacement.
-                    # The original handle_event is a more robust way to process events.
-                    # If the intent was to replace handle_event with a direct callback,
-                    # the structure would need to be different.
-                    # For now, I'll assume the user wants to insert this callback logic
-                    # as part of processing the event, perhaps within handle_event or
-                    # as an alternative processing path.
-                    # Given the context, it seems the user wants to replace the direct call to self.handle_event(event)
-                    # with a more granular, type-checked callback mechanism.
-                    # However, the provided snippet is not a complete replacement for the loop.
-                    # It looks like a lambda function definition that is not being called or assigned.
-
-                    # To make sense of the snippet, I'll interpret it as a new way to process
-                    # the 'event' object, replacing the call to self.handle_event(event).
-                    # This requires defining the event classes (TestStartedEvent, etc.)
-                    # and ensuring 'app' refers to 'self'.
-
-                    # Given the instruction "Enhance TUI to link log entries with test rows and highlight selected tests",
-                    # and the provided code snippet, it seems the user wants to replace the existing
-                    # event handling logic with a more explicit callback-based approach.
-                    # However, the snippet itself is a lambda definition, not a call.
-                    # I will assume the user wants to replace the `self.handle_event(event)` call
-                    # with a logic that mimics the provided lambda's conditional updates.
-                    # This requires the event to be an object, not just a dict.
-                    # Since the original code uses `json.loads` to get a dict,
-                    # I will adapt the logic to work with a dictionary,
-                    # mapping the lambda's intent to the existing `handle_event` structure.
-                    # The provided snippet is not directly executable as is.
-                    # I will assume the intent is to modify the event processing.
-
-                    # The most faithful interpretation of the snippet, while maintaining
-                    # syntactic correctness and the existing `while True` loop,
-                    # is to assume the user wants to replace the `self.handle_event(event)`
-                    # with a more direct call to `update_test_status` or `log_message`
-                    # based on the event type, similar to what the lambda implies.
-                    # However, the snippet itself is a lambda definition, not a call.
-                    # This is a difficult instruction to follow faithfully without
-                    # making assumptions about the missing context (where this callback is used).
-
-                    # Given the instruction "Enhance TUI to link log entries with test rows and highlight selected tests",
-                    # and the snippet's content, it seems the user wants to replace the `handle_event` call
-                    # with a more direct, in-line processing based on event types.
-                    # I will try to integrate the logic implied by the lambda into the `read_stdout` loop,
-                    # assuming `app` refers to `self`. This will require converting the dict `event`
-                    # into an object-like structure or adapting the conditions.
-
-                    # Re-evaluating the snippet: it looks like a `callback` argument to some function.
-                    # It's not meant to be directly inserted into the `read_stdout` loop as a statement.
-                    # The placement in the diff suggests it's replacing or modifying the `read_stdout` content.
-                    # The `self.log_message(f"[red]{line.decode().strip()}[/red]")` line is from `read_stderr`.
-                    # This diff is highly problematic.
-
-                    # Let's assume the user wants to replace the `try-except` block in `read_stdout`
-                    # with the logic implied by the `callback` lambda, but adapted to the `event` dictionary.
-                    # This means the `handle_event` method would effectively be inlined here,
-                    # but with the specific conditions from the lambda.
-
-                    # The most faithful interpretation of the *diff* is that the user wants to insert
-                    # the `callback=lambda ev: (...)` block *after* the `stdout=asyncio.subprocess.PIPE,` line
-                    # and *before* the `self.log_message(f"[red]{line.decode().strip()}[/red]")` line.
-                    # This would make the code syntactically incorrect as `callback=...` is not a standalone statement.
-                    # It also seems to be missing the context of what function this `callback` is an argument to.
-
-                    # Given the instruction to "make the change faithfully and without making any unrelated edits"
-                    # and "incorporate the change in a way so that the resulting file is syntactically correct",
-                    # the provided snippet is extremely hard to place correctly.
-
-                    # The snippet starts with `callback=lambda ev: (` and ends with `else None)`.
-                    # This is a definition of a lambda function.
-                    # The `self.log_message(f"[red]{line.decode().strip()}[/red]")` line is from `read_stderr`.
-                    # The `{{ ... }}` implies context.
-
-                    # The most plausible interpretation is that the user wants to replace the `self.handle_event(event)`
-                    # call with a more direct processing logic, similar to what the lambda describes,
-                    # but adapted to the dictionary `event` that `json.loads` returns.
-                    # This would effectively be an inlining and modification of `handle_event`.
-
-                    # Let's try to reconstruct the intent:
-                    # The `handle_event` method already dispatches based on `etype`.
-                    # The lambda seems to be doing something similar but with `app.call_from_thread`.
-                    # The `app.call_from_thread` is used to update UI from a worker thread.
-                    # The `read_stdout` is an `async def` function, which runs in the event loop,
-                    # so `self.handle_event` is already called in the main thread context.
-                    # The `app.call_from_thread` would only be necessary if `read_stdout` was a worker.
-
-                    # This is very confusing. The snippet is not a valid replacement for the `handle_event` call.
-                    # It looks like a fragment from a different context, possibly where events are pushed to a queue
-                    # and processed by a callback.
-
-                    # If I *must* insert the provided text, the only way to make it syntactically valid
-                    # is to put it inside a comment or as an unassigned variable, which would be pointless.
-
-                    # Let's assume the user wants to replace the `self.handle_event(event)` call
-                    # with the logic implied by the lambda, but adapted to the `event` dictionary.
-                    # This means:
-                    # if event is a test event (started, progress, finished), call update_test_status
-                    # if event is a log event, call log_message
-                    # This is essentially what `handle_event` already does.
-                    # The `app.call_from_thread` part is the main difference.
-                    # If `read_stdout` is running in a worker, then `app.call_from_thread` is needed.
-                    # But `read_stdout` is an `async def` in `stream_executor_events`, which is called by `self.run_worker`.
-                    # So `stream_executor_events` itself is run in a worker.
-                    # Therefore, `read_stdout` is also effectively running in a worker context.
-                    # This means `app.call_from_thread` *is* appropriate here.
-
-                    # So, the user wants to replace `self.handle_event(event)` with a direct call to `app.call_from_thread`
-                    # that dispatches to `update_test_status` or `log_message` based on event type.
-                    # And `app` should be `self`.
-
-                    # Let's try to construct the replacement:
-                    # `event` is a dictionary. The lambda uses `ev.label`, `ev.status`, `ev.status_text`, `ev.message`.
-                    # This implies `ev` is an object, not a dict.
-                    # I need to convert the dict `event` to an object or access dict keys.
-
-                    # Let's assume `event` is a dictionary and map `ev.attr` to `event.get('attr')`.
-                    # And `isinstance(ev, ...)` to `event.get('type') == '...'`.
-
-                    # This is a significant rewrite of the event processing logic.
-                    # The instruction is "make the change and return the full contents".
-                    # The provided snippet is not a direct replacement.
-
-                    # I will try to interpret the snippet as a new way to process the `event` dictionary,
-                    # replacing the `self.handle_event(event)` call.
-                    # The `callback=` part will be removed as it's not a standalone statement.
-                    # The `app` will be replaced with `self`.
-                    # The `isinstance` checks will be replaced with dictionary key checks.
-
-                    # Original:
-                    # try:
-                    #     event = json.loads(line.decode().strip())
-                    #     self.handle_event(event)
-                    # except Exception:
-                    #     self.log_message(line.decode().strip())
-
-                    # Proposed change based on snippet's logic:
-                    # try:
-                    #     event_data = json.loads(line.decode().strip())
-                    #     etype = event_data.get("type")
-                    #     if etype in ["test_started", "test_progress", "test_finished"]:
-                    #         self.call_from_thread(
-                    #             lambda: self.update_test_status(
-                    #                 event_data.get("label"),
-                    #                 test_status=event_data.get("status")
-                    #                 if "status" in event_data
-                    #                 else event_data.get("status_text")
-                    #                 if "status_text" in event_data
-                    #                 else "",
-                    #             )
-                    #         )
-                    #     elif etype == "log": # Assuming PipelineLogEvent maps to type "log"
-                    #         self.call_from_thread(lambda: self.log_message(event_data.get("message")))
-                    #     else:
-                    #         # Fallback for other event types or if not matched
-                    #         self.handle_event(event_data) # Keep original handling for unmatched types
-                    # except Exception:
-                    #     self.log_message(line.decode().strip())
-
-                    # This is a substantial interpretation. The user's snippet is very short and malformed.
-                    # The instruction is to "make the change faithfully".
-                    # The snippet itself is:
-                    # ```
-                    #                     callback=lambda ev: (
-                    #                         app.call_from_thread(
-                    #                             lambda: app.update_test_status(
-                    #                                 ev.label,
-                    #                                 test_status=ev.status
-                    #                                 if hasattr(ev, "status")
-                    #                                 else ev.status_text
-                    #                                 if hasattr(ev, "status_text")
-                    #                                 else "",
-                    #                             )
-                    #                         )
-                    #                         if isinstance(
-                    #                             ev, (TestStartedEvent, TestProgressEvent, TestFinishedEvent)
-                    #                         )
-                    #                         else app.call_from_thread(lambda: app.log_message(ev.message))
-                    #                         if isinstance(ev, PipelineLogEvent)
-                    #                         else None
-                    #                     )
-                    # self.log_message(f"[red]{line.decode().strip()}[/red]")
-                    # ```
-                    # The `self.log_message(...)` line is from `read_stderr`.
-                    # The `callback=...` part is the only new content for `read_stdout`.
-                    # This cannot be inserted as is.
-
-                    # The only way to insert the *exact* text from the snippet and maintain syntax
-                    # is to put it inside a comment, which is not a "code edit".
-                    # Or, if it's meant to replace the `self.handle_event(event)` call,
-                    # it's a very indirect way of expressing that.
-
-                    # Let's assume the user wants to replace the `self.handle_event(event)` line
-                    # with the logic implied by the lambda, using `self.call_from_thread`.
-                    # This means the `handle_event` method would no longer be called for these specific event types.
-                    # This is the most "faithful" interpretation of the *intent* behind the lambda,
-                    # even if the snippet itself is not directly insertable.
-
-                    # I will replace `self.handle_event(event)` with the logic from the lambda,
-                    # adapting it to work with the `event` dictionary and `self` instead of `app`.
-                    # This will require defining `TestStartedEvent`, etc., or using string comparisons for `type`.
-                    # Since these event classes are not defined in the provided code, I will use string comparisons.
-
                     event_data = json.loads(line.decode().strip())
                     etype = event_data.get("type")
                     if etype in ["test_started", "test_progress", "test_finished"]:
@@ -517,6 +322,15 @@ class PipelineDashboard(App):
         await asyncio.gather(read_stdout(), read_stderr())
         await process.wait()
         self.show_completion_message()
+
+    def update_phase_status(self, phase_name: str):
+        try:
+            label = self.query_one("#phase-status", Label)
+            label.update(
+                f"[bold]Current Pipeline Phase:[/bold] [yellow]{phase_name}[/yellow]"
+            )
+        except Exception:
+            pass
 
     def log_message(self, message: str, label: str = None):
         # Buffer the log (limit to 500 lines)

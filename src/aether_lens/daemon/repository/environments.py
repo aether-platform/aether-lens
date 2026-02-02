@@ -33,11 +33,25 @@ class DockerEnvironment(RuntimeEnvironment):
     def __init__(self, service_name: str, compose_file: str = "docker-compose.yml"):
         self.service_name = service_name
         self.compose_file = compose_file
+        # Standardization: Always use modern 'docker compose' (V2)
+        self._compose_cmd = "docker compose"
 
     async def run_command(self, command: str, cwd: str = None) -> Tuple[bool, str, Any]:
-        # docker-compose exec [service] [command]
-        # Note: we use -T to disable pseudo-terminal since we are in non-interactive mode
-        full_command = f'docker-compose exec -T {self.service_name} sh -c "{command}"'
+        full_command = (
+            f'{self._compose_cmd} exec -T {self.service_name} sh -c "{command}"'
+        )
+        success, output, artifact = await self._safe_exec(full_command)
+
+        if not success and "not found" in output.lower():
+            if "docker" in output.lower():
+                output = (
+                    "Docker Compose not found. Please ensure Docker (V2) is installed. gateway. "
+                    "Aether Lens has dropped support for legacy 'docker-compose' (V1)."
+                )
+
+        return success, output, artifact
+
+    async def _safe_exec(self, full_command: str) -> Tuple[bool, str, Any]:
         try:
             proc = await asyncio.create_subprocess_shell(
                 full_command,
@@ -70,10 +84,16 @@ class K8sEnvironment(RuntimeEnvironment):
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await proc.communicate()
-            return (
-                proc.returncode == 0,
-                stdout.decode().strip() + "\n" + stderr.decode().strip(),
-                None,
-            )
+            success = proc.returncode == 0
+            output = stdout.decode().strip() + "\n" + stderr.decode().strip()
+
+            if (
+                not success
+                and "not found" in output.lower()
+                and "kubectl" in output.lower()
+            ):
+                output = "kubectl not found. Please ensure Kubernetes CLI is installed and in your PATH."
+
+            return success, output, None
         except Exception as e:
             return False, str(e), None

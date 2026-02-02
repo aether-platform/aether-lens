@@ -106,12 +106,20 @@ class TestExecutor:
             command, cwd=self.target_dir
         )
 
-        # Specialized error handling for common quality tools
+        # Specialized error handling for common tools
         if not success and error:
-            if "not found" in error.lower() or "no such file" in error.lower():
+            error_lower = error.lower()
+            if "not found" in error_lower or "no such file" in error_lower:
                 if "ruff" in command:
                     error = "Ruff not found. Please install it with 'pip install ruff'."
                 elif "sonar-scanner" in command:
                     error = "sonar-scanner not found. Please ensure it is installed and in your PATH."
+                elif "docker-compose" in command or "docker compose" in command:
+                    error = (
+                        "Docker Compose not found. Please ensure Docker is installed and 'docker-compose' or "
+                        "'docker compose' is available in your PATH."
+                    )
+                elif "kubectl" in command:
+                    error = "kubectl not found. Please ensure Kubernetes CLI is installed and in your PATH."
 
         return success, error, artifact

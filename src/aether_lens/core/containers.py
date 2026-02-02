@@ -1,8 +1,30 @@
+import os
+import sys
+
 from dependency_injector import containers, providers
 
 
 class Container(containers.DeclarativeContainer):
     """DI container for core components."""
+
+    @staticmethod
+    def validate_environment():
+        """Proactively check for environment issues like missing SOCKS support."""
+        # Use simple os.environ check to avoid httpx pick-up issues
+        for var in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
+            val = os.getenv(var)
+            if val and "socks" in val.lower():
+                try:
+                    import socksio  # noqa: F401
+                except ImportError:
+                    print(
+                        f"\n[bold red]Error:[/bold red] Environment variable '{var}' is set to use SOCKS ({val}), "
+                        "but the 'socksio' package is not installed."
+                    )
+                    print(
+                        "Please install it with: [bold]pip install 'httpx[socks]'[/bold] or unset the proxy variable.\n"
+                    )
+                    sys.exit(1)
 
     config = providers.Configuration()
 

@@ -267,7 +267,10 @@ def sync_results_to_allure_api(
         headers["Authorization"] = f"Bearer {api_key}"
 
     try:
-        response = httpx.post(sync_url, json=payload, headers=headers, timeout=30.0)
+        with httpx.Client(trust_env=False) as client:
+            response = client.post(
+                sync_url, json=payload, headers=headers, timeout=30.0
+            )
         if response.status_code == 200:
             return True, "Successfully synced results to Allure Dashboard."
         else:

@@ -2,10 +2,12 @@ import asyncio
 import json
 import os
 import platform
+import shutil
 import subprocess
 import time
 import uuid
 from pathlib import Path
+from typing import Tuple
 
 import httpx
 import logfire
@@ -46,6 +48,9 @@ class ExecutionController:
         if not services:
             return True
 
+        # Global orchestration strategy (cli or sdk)
+        global_strategy = config.get("orchestration_strategy", "cli")
+
         for svc in services:
             name = svc.get("name", "Unknown")
             command = svc.get("command")
@@ -53,15 +58,36 @@ class ExecutionController:
                 continue
 
             health_check = svc.get("health_check")
+            # Local override for specific service strategy
+            svc_strategy = svc.get("strategy", global_strategy)
 
-            msg = f" -> [Management] Starting service: [cyan]{name}[/cyan] ({command})"
+            msg = f" -> [Management] Starting service: [cyan]{name}[/cyan] ({command}) [Strategy: {svc_strategy}]"
             console.print(msg)
+
+            # Pre-check tool presence to give better error messages
+            tool_ok, tool_err = self._check_tool_presence(command)
+            if not tool_ok:
+                err_msg = f"    - [red]Error:[/red] {tool_err}. Please ensure the tool is installed."
+                console.print(err_msg)
+                if event_emitter:
+                    event_emitter.emit(
+                        PipelineLogEvent(
+                            type="log", timestamp=time.time(), message=err_msg
+                        )
+                    )
+                return False
+
             if event_emitter:
                 event_emitter.emit(
                     PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
                 )
 
-            proc = self.start_background_process(command, cwd=target_dir)
+            # Execution Dispatch based on strategy
+            if svc_strategy == "sdk":
+                proc = await self._start_via_sdk(command, cwd=target_dir)
+            else:
+                proc = self.start_background_process(command, cwd=target_dir)
+
             if proc:
                 if self.lifecycle_registry:
                     self.lifecycle_registry.register(target_dir, proc)
@@ -76,7 +102,23 @@ class ExecutionController:
                 return False
         return True
 
+    async def _start_via_sdk(self, command: str, cwd: str = None):
+        """Placeholder for SDK-based orchestration (e.g. docker-py)."""
+        console.print(
+            "    - [yellow]SDK strategy requested but falling back to CLI (not fully implemented).[/yellow]"
+        )
+        return self.start_background_process(command, cwd=cwd)
+
     def start_background_process(self, command, cwd=None):
+        """Start a background process using the configured strategy."""
+        # Drop legacy V1 support and standardize on V2
+        if command.startswith("docker-compose"):
+            new_command = command.replace("docker-compose", "docker compose", 1)
+            console.print(
+                f"    - [dim]Standardizing legacy command to:[/dim] [cyan]{new_command}[/cyan]"
+            )
+            command = new_command
+
         try:
             kwargs = {}
             if platform.system() != "Windows":
@@ -86,6 +128,35 @@ class ExecutionController:
         except Exception as e:
             console.print(f"    - [red]Error starting background process:[/red] {e}")
             return None
+
+    def _check_tool_presence(self, command: str) -> Tuple[bool, str]:
+        """Check if the first command in the string is likely available."""
+        if not command:
+            return True, ""
+
+        parts = command.split()
+        first_word = parts[0]
+
+        # Check for single-word commands (V1 or generic)
+        if shutil.which(first_word):
+            return True, ""
+
+        # Fallback check for Docker Compose V2 when docker-compose is missing
+        if first_word == "docker-compose":
+            if shutil.which("docker"):
+                # Docker CLI exists, we can likely translate to 'docker compose'
+                return True, ""
+            return (
+                False,
+                "Neither 'docker-compose' nor 'docker' found. Please install Docker.",
+            )
+
+        # Explicit check for 'docker compose'
+        if first_word == "docker" and len(parts) > 1 and parts[1] == "compose":
+            if shutil.which("docker"):
+                return True, ""
+
+        return False, f"Command '{first_word}' not found in PATH."
 
     def load_config(self, target_dir, overrides=None):
         config_path = os.path.join(target_dir, "aether-lens.config.json")
@@ -181,7 +252,7 @@ class ExecutionController:
             )
 
         start_time = time.time()
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(trust_env=False) as client:
             while time.time() - start_time < timeout:
                 try:
                     resp = await client.get(url)
@@ -237,6 +308,9 @@ class ExecutionController:
     ):
         target_dir = os.path.abspath(target_dir or ".")
 
+        # Phase 1: Preparation (Skaffold-like Orchestration)
+        self._emit_phase_log(event_emitter, "PREPARATION")
+
         # Merge CLI arguments as overrides
         overrides = {
             "browser_url": browser_url,
@@ -280,6 +354,9 @@ class ExecutionController:
         if not await self.ensure_services(
             target_dir, config, event_emitter=event_emitter
         ):
+            self._emit_error_log(
+                event_emitter, "Service Orchestration failed during PREPARATION phase."
+            )
             return
 
         # 1. Deployment hooks
@@ -292,12 +369,9 @@ class ExecutionController:
                 success, msg = self.run_deployment_hook(command, cwd=target_dir)
                 if not success:
                     if event_emitter:
-                        event_emitter.emit(
-                            PipelineLogEvent(
-                                type="log",
-                                timestamp=time.time(),
-                                message=f"[red]Deployment failed:[/red] {msg}",
-                            )
+                        self._emit_error_log(
+                            event_emitter,
+                            f"Deployment Hook failed during PREPARATION phase: {msg}",
                         )
                     return
 
@@ -307,12 +381,9 @@ class ExecutionController:
                     health_check, event_emitter=event_emitter
                 ):
                     if event_emitter:
-                        event_emitter.emit(
-                            PipelineLogEvent(
-                                type="log",
-                                timestamp=time.time(),
-                                message="[red]Health check failed.[/red]",
-                            )
+                        self._emit_error_log(
+                            event_emitter,
+                            "Health check failed during PREPARATION phase.",
                         )
                     return
 
@@ -327,6 +398,8 @@ class ExecutionController:
                 )
             return
 
+        # Phase 2: AI Analysis (Planner)
+        self._emit_phase_log(event_emitter, "ANALYSIS")
         # AI Analysis
         analysis = self.planner.run_analysis(
             diff, context, strategy, custom_instruction
@@ -341,11 +414,12 @@ class ExecutionController:
                     PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
                 )
             return
-        # 3. Quality Guard Injection
+        # Phase 3: Quality Guard
         quality_conf = config.get(
             "quality_checks", {"enabled": True, "providers": ["ruff"]}
         )
         if quality_conf.get("enabled"):
+            self._emit_phase_log(event_emitter, "QUALITY GUARD")
             quality_tests = []
             for provider in quality_conf.get("providers", []):
                 if provider == "ruff":
@@ -367,6 +441,9 @@ class ExecutionController:
 
             # Prepend quality tests to the recommended tests
             all_tests = quality_tests + all_tests
+
+        # Phase 4: Execution
+        self._emit_phase_log(event_emitter, "EXECUTION")
 
         # Execution
         results = await self._execute_tests(
@@ -474,3 +551,20 @@ class ExecutionController:
         elif etype == "log":
             message = getattr(event, "message", "")
             app.log_message(message)
+
+    def _emit_phase_log(self, event_emitter, phase_name: str):
+        separator = "=" * 20
+        msg = f"\n[bold yellow]{separator} PHASE: {phase_name} {separator}[/bold yellow]\n"
+        console.print(msg)
+        if event_emitter:
+            event_emitter.emit(
+                PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
+            )
+
+    def _emit_error_log(self, event_emitter, message: str):
+        msg = f"[bold red]ERROR:[/bold red] {message}"
+        console.print(msg)
+        if event_emitter:
+            event_emitter.emit(
+                PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
+            )
