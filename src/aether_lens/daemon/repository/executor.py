@@ -1,6 +1,5 @@
 import time
 
-from playwright.async_api import async_playwright
 from rich.markup import escape
 from rich.text import Text
 
@@ -72,6 +71,8 @@ class TestExecutor:
                 base_url=app_url, current_dir=self.target_dir
             )
             try:
+                from playwright.async_api import async_playwright
+
                 async with async_playwright() as p:
                     browser = await p.chromium.launch()
                     page = await browser.new_page()

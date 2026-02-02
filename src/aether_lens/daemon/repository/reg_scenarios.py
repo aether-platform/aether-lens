@@ -1,7 +1,10 @@
-from playwright.async_api import Page
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from playwright.async_api import Page
 
 
-async def layout_check(page: Page, parameters: dict):
+async def layout_check(page: "Page", parameters: dict):
     path_url = parameters.get("path", "/")
     theme = parameters.get("theme", "light")
     if theme == "dark":
@@ -20,7 +23,7 @@ async def layout_check(page: Page, parameters: dict):
     pass
 
 
-async def login_scenario(page: Page, parameters: dict):
+async def login_scenario(page: "Page", parameters: dict):
     username = parameters.get("username", "admin")
     password = parameters.get("password", "password")
 
