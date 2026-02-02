@@ -34,14 +34,11 @@ class Container(containers.DeclarativeContainer):
         return CheckService()
 
     @staticmethod
-    def _create_execution_controller(
-        config, test_runner, planner, lifecycle_registry, **kwargs
-    ):
+    def _create_execution_controller(config, planner, lifecycle_registry, **kwargs):
         from aether_lens.daemon.controller.execution import ExecutionController
 
         return ExecutionController(
             config=config,
-            test_runner=test_runner,
             planner=planner,
             lifecycle_registry=lifecycle_registry,
         )
@@ -59,12 +56,6 @@ class Container(containers.DeclarativeContainer):
         return WatchController(
             target_dir=None, on_change_callback=None, orchestrator=execution_ctrl
         )
-
-    @staticmethod
-    def _create_test_runner(config, **kwargs):
-        from aether_lens.daemon.repository.runner import VisualTestRunner
-
-        return VisualTestRunner(base_url=None, current_dir=None)
 
     @staticmethod
     def _create_test_planner(**kwargs):
@@ -108,13 +99,11 @@ class Container(containers.DeclarativeContainer):
 
     check_service = providers.Factory(_create_check_service)
 
-    test_runner = providers.Factory(_create_test_runner, config=config.provider)
     test_planner = providers.Factory(_create_test_planner)
 
     execution_service = providers.Singleton(
         _create_execution_controller,
         config=config.provider,
-        test_runner=test_runner,
         planner=test_planner,
         lifecycle_registry=lifecycle_registry,
     )

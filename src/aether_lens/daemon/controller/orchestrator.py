@@ -13,6 +13,7 @@ class AetherOrchestrator:
 
     def __init__(self, execution_ctrl: ExecutionController):
         self.execution_ctrl = execution_ctrl
+        self.execution_ctrl.orchestrator = self
         self._watchers = {}  # target_dir -> observer
 
     async def start_background_process(self, command, cwd=None):

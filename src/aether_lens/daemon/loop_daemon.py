@@ -1,3 +1,5 @@
+import asyncio
+
 from dependency_injector.wiring import Provide, inject
 from rich.console import Console
 
@@ -17,7 +19,7 @@ def run_loop_daemon(
     blocking=True,
     browser_strategy="inpod",
     browser_url=None,
-    test_runner=Provide[Container.test_runner],
+    loop_handler_factory=Provide[Container.loop_handler.provider],
 ):
     """
     Starts the loop daemon that watches for changes and triggers sync.
@@ -27,17 +29,20 @@ def run_loop_daemon(
     console.print(f" -> Remote Path: {remote_path}")
     console.print(f" -> Browser Strategy: {browser_strategy}")
 
-    test_runner.pod_name = pod_name
-    test_runner.namespace = namespace
-    test_runner.remote_path = remote_path
-    test_runner.browser_strategy = browser_strategy
-    test_runner.browser_url = browser_url
+    handler = loop_handler_factory(
+        target_dir=target_dir,
+        pod_name=pod_name,
+        namespace=namespace,
+        remote_path=remote_path,
+        browser_strategy=browser_strategy,
+        browser_url=browser_url,
+    )
 
     # Initial sync
-    test_runner.sync_and_trigger()
+    asyncio.run(handler.sync_and_trigger())
 
-    def on_change(path):
-        test_runner.sync_and_trigger(path)
+    async def on_change(path):
+        await handler.sync_and_trigger(path)
 
     observer = start_watcher(target_dir, on_change, blocking=blocking)
 

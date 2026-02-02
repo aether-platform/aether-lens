@@ -1,12 +1,10 @@
 import asyncio
 import json
-import platform
 import re
 import time
 import uuid
-from os import environ
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 try:
     from python_on_whales import DockerClient
@@ -16,14 +14,15 @@ except ImportError:
 import httpx
 import logfire
 from rich.console import Console
-from rich.panel import Panel
 
 from aether_lens.core.domain.events import CallbackTransport, EventEmitter
 from aether_lens.core.domain.models import (
     PipelineLogEvent,
 )
 from aether_lens.core.presentation import report
+from aether_lens.core.presentation.logging import PipelineFormatter
 from aether_lens.core.presentation.tui import PipelineDashboard
+from aether_lens.daemon.repository.discovery import ToolResolver
 from aether_lens.daemon.repository.environments import (
     DockerEnvironment,
     K8sEnvironment,
@@ -48,7 +47,9 @@ class ComposeProjectHandle:
             # but python-on-whales calls are sync.
             self.docker_client.compose.down(config_files=self.config_files)
         except Exception as e:
-            console.print(f"    - [yellow]Warning: SDK Cleanup failed:[/yellow] {e}")
+            self._emit_log(
+                None, PipelineFormatter.format_warning(f"SDK Cleanup failed: {e}")
+            )
 
     def terminate(self):
         """Alias for stop."""
@@ -60,12 +61,12 @@ class ExecutionController:
     Unified controller for test execution, merging ExecutionService and Pipeline orchestration.
     """
 
-    def __init__(self, config, test_runner=None, planner=None, lifecycle_registry=None):
+    def __init__(self, config, planner=None, lifecycle_registry=None):
         self.config = config
-        self.test_runner = test_runner
         self.planner = planner
         self.lifecycle_registry = lifecycle_registry
         self.cleanup_process = None
+        self.orchestrator = None
 
     def stop_dev_loop(self, target_dir: str) -> bool:
         """Stop all background services for a target directory."""
@@ -93,30 +94,21 @@ class ExecutionController:
             # Local override for specific service strategy
             svc_strategy = svc.get("strategy", global_strategy)
 
-            msg = f" -> [Management] Starting service: [cyan]{name}[/cyan] ({command}) [Strategy: {svc_strategy}]"
-            console.print(msg)
+            msg = PipelineFormatter.format_service_start(name, command, svc_strategy)
+            self._emit_log(event_emitter, msg)
 
             # NEW: Normalize binary name early to favor V2 (docker compose)
             if command.startswith("docker-compose"):
                 command = command.replace("docker-compose", "docker compose", 1)
 
             # Pre-check tool presence using the normalized command
-            tool_ok, tool_err = self._check_tool_presence(command)
+            tool_ok, tool_err = await ToolResolver.check_tool_presence(command)
             if not tool_ok:
-                err_msg = f"    - [red]Error:[/red] {tool_err}. Please ensure the tool is installed."
-                console.print(err_msg)
-                if event_emitter:
-                    event_emitter.emit(
-                        PipelineLogEvent(
-                            type="log", timestamp=time.time(), message=err_msg
-                        )
-                    )
-                return False
-
-            if event_emitter:
-                event_emitter.emit(
-                    PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
+                err_msg = PipelineFormatter.format_error(
+                    f"{tool_err}. Please ensure the tool is installed."
                 )
+                self._emit_log(event_emitter, err_msg)
+                return False
 
             # Execution Dispatch based on strategy
             if svc_strategy == "sdk":
@@ -141,14 +133,15 @@ class ExecutionController:
     async def _start_via_sdk(self, command: str, cwd: str = None):
         """Start a service via the Python-on-Whales SDK."""
         if not DockerClient:
-            console.print(
-                "    - [red]Error:[/red] 'python-on-whales' library not installed. Falling back to CLI."
+            self._emit_log(
+                None,
+                PipelineFormatter.format_error(
+                    "'python-on-whales' library not installed. Falling back to CLI."
+                ),
             )
             return await self.start_background_process(command, cwd=cwd)
 
-        console.print(
-            "    - [cyan][SDK][/cyan] Orchestrating via Python-on-Whales SDK..."
-        )
+        self._emit_log(None, PipelineFormatter.format_sdk_orchestration_message())
         try:
             docker_client = DockerClient()
 
@@ -197,8 +190,11 @@ class ExecutionController:
 
             return await self.start_background_process(command, cwd=cwd)
         except Exception as e:
-            console.print(
-                f"    - [yellow]SDK failed: {e}. Falling back to CLI.[/yellow]"
+            self._emit_log(
+                None,
+                PipelineFormatter.format_warning(
+                    f"SDK failed: {e}. Falling back to CLI."
+                ),
             )
             return await self.start_background_process(command, cwd=cwd)
 
@@ -211,53 +207,16 @@ class ExecutionController:
         try:
             return await asyncio.create_subprocess_shell(command, cwd=cwd)
         except Exception as e:
-            console.print(f"    - [red]Error starting background process:[/red] {e}")
+            self._emit_log(
+                None,
+                PipelineFormatter.format_error(
+                    f"Error starting background process: {e}"
+                ),
+            )
             return None
 
-    def _check_tool_presence(self, command: str) -> Tuple[bool, str]:
-        """Check if the required tool is available using Path."""
-        if not command:
-            return True, ""
-
-        words = command.split()
-        first_word = words[0]
-
-        # Handling 'docker compose' as a single tool concept
-        if first_word == "docker" and len(words) > 1 and words[1] == "compose":
-            if self._find_executable("docker"):
-                return True, ""
-            return False, "Command 'docker' (required for 'docker compose') not found."
-
-        if self._find_executable(first_word):
-            return True, ""
-        return False, f"Command '{first_word}' not found in PATH."
-
-    def _find_executable(self, name):
-        """Path-based replacement for which."""
-        if not name:
-            return None
-
-        # Handle absolute or relative paths directly
-        path_name = Path(name)
-        if path_name.is_absolute() and path_name.exists() and not path_name.is_dir():
-            return str(path_name)
-
-        env_path = environ.get("PATH", "")
-        # Handle platform-specific path separators
-        sep = ";" if platform.system() == "Windows" else ":"
-        for p in env_path.split(sep):
-            if not p:
-                continue
-            file_path = Path(p.strip('"')) / name
-            if file_path.exists() and not file_path.is_dir():
-                return str(file_path)
-            if platform.system() == "Windows":
-                exe_path = file_path.with_suffix(".exe")
-                if exe_path.exists() and not exe_path.is_dir():
-                    return str(exe_path)
-        return None
-
-    def load_config(self, target_dir, overrides=None):
+    def load_config(self, target_dir: str, overrides: Optional[dict] = None) -> dict:
+        """Load and merge configuration from file and overrides."""
         config_path = Path(target_dir) / "aether-lens.config.json"
         config = {}
         if config_path.exists():
@@ -265,27 +224,39 @@ class ExecutionController:
                 with open(config_path, "r") as f:
                     config = json.load(f)
             except Exception as e:
-                console.print(
-                    f"[yellow]Warning: Failed to load config file: {e}[/yellow]"
+                self._emit_log(
+                    None,
+                    PipelineFormatter.format_warning(
+                        f"Failed to load config file: {e}"
+                    ),
                 )
 
         if overrides:
             config.update({k: v for k, v in overrides.items() if v is not None})
 
-        browser_strategy = config.get("browser_strategy", "local")
-        browser_url = config.get("browser_url")
-
-        if not browser_url:
-            if browser_strategy == "docker":
-                browser_url = "ws://localhost:9222"
-            elif browser_strategy == "inpod":
-                browser_url = environ.get(
-                    "TEST_RUNNER_URL", "ws://aether-lens-sidecar:9222"
-                )
-
-        config["browser_strategy"] = browser_strategy
-        config["browser_url"] = browser_url
+        # Set defaults if missing
+        config.setdefault("strategy", "auto")
+        config.setdefault("execution_env", "local")
         return config
+
+    def _create_execution_environment(self, config: dict, target_dir: str):
+        """Factory method to create the appropriate execution environment."""
+        env_type = config.get("execution_env", "local")
+
+        if env_type == "docker":
+            docker_conf = config.get("docker_config", {})
+            return DockerEnvironment(
+                service_name=docker_conf.get("service_name", "app"),
+                project_dir=target_dir,
+            )
+        elif env_type == "k8s":
+            k8s_conf = config.get("k8s_config", {})
+            return K8sEnvironment(
+                pod_name=k8s_conf.get("pod_name"),
+                namespace=k8s_conf.get("namespace", "default"),
+                container=k8s_conf.get("container", "aether-lens"),
+            )
+        return LocalEnvironment()
 
     def save_test_session(self, target_dir, results, strategy):
         """Save run results to a unified history directory."""
@@ -310,14 +281,13 @@ class ExecutionController:
         with open(history_dir / "latest.json", "w") as f:
             json.dump(data, f, indent=2)
 
-        console.print(f" -> [Execution] Session saved: [cyan]{filename}[/cyan]")
+        self._emit_log(None, PipelineFormatter.format_session_saved(filename))
 
     async def run_deployment_hook(self, command, cwd=None):
+        """Run an arbitrary command in a subprocess for deployment/setup."""
         if not command:
             return True, "No command provided"
-        console.print(
-            f" -> [Execution] Running deployment hook: [cyan]{command}[/cyan]"
-        )
+        self._emit_log(None, PipelineFormatter.format_deployment_hook_start(command))
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,
@@ -327,26 +297,26 @@ class ExecutionController:
             )
             stdout, stderr = await proc.communicate()
             if proc.returncode == 0:
-                console.print("    - [green]Deployment OK[/green]")
+                self._emit_log(None, PipelineFormatter.format_deployment_hook_success())
                 return True, stdout.decode().strip()
             else:
                 err = stderr.decode().strip()
-                console.print(f"      {err}")
+                self._emit_log(
+                    None, PipelineFormatter.format_deployment_hook_failure(err)
+                )
                 return False, err
         except Exception as e:
-            console.print(f"    - [red]Deployment Error:[/red] {e}")
+            self._emit_log(
+                None, PipelineFormatter.format_error(f"Deployment Error: {e}")
+            )
             return False, str(e)
 
     async def wait_for_health_check(self, url, timeout=30, event_emitter=None):
         if not url:
             return True
 
-        msg = f" -> [Management] Waiting for health check: [cyan]{url}[/cyan] ..."
-        console.print(msg)
-        if event_emitter:
-            event_emitter.emit(
-                PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
-            )
+        msg = PipelineFormatter.format_health_check_start(url)
+        self._emit_log(event_emitter, msg)
 
         start_time = time.time()
         async with httpx.AsyncClient(trust_env=False) as client:
@@ -354,25 +324,15 @@ class ExecutionController:
                 try:
                     resp = await client.get(url)
                     if resp.status_code == 200:
-                        ok_msg = "    - [green]Health Check OK[/green]"
-                        console.print(ok_msg)
-                        if event_emitter:
-                            event_emitter.emit(
-                                PipelineLogEvent(
-                                    type="log", timestamp=time.time(), message=ok_msg
-                                )
-                            )
+                        ok_msg = PipelineFormatter.format_health_check_success()
+                        self._emit_log(event_emitter, ok_msg)
                         return True
                 except Exception:
                     pass
                 await asyncio.sleep(1)
 
-        err_msg = "    - [red]Health Check Timeout[/red]"
-        console.print(err_msg)
-        if event_emitter:
-            event_emitter.emit(
-                PipelineLogEvent(type="log", timestamp=time.time(), message=err_msg)
-            )
+        err_msg = PipelineFormatter.format_health_check_timeout()
+        self._emit_log(event_emitter, err_msg)
         return False
 
     async def get_git_diff(self, target_dir):
@@ -394,211 +354,177 @@ class ExecutionController:
     async def run_pipeline(
         self,
         target_dir: str,
-        browser_url: str = None,
         strategy: str = "auto",
         app_url: str = None,
         interactive: bool = False,
         event_emitter: EventEmitter = None,
         context: str = "watch",
-        environment: str = "local",
-        close_browser: bool = False,
         auto_watch: bool = False,
         custom_instruction: str = None,
+        **kwargs,
     ):
+        """Unified entry point for the pipeline flow."""
         target_dir = str(Path(target_dir or ".").resolve())
 
         try:
             # Phase 1: Preparation
             self._emit_phase_log(event_emitter, "PREPARATION")
-
-            overrides = {
-                "browser_url": browser_url,
-                "strategy": strategy,
-                "app_url": app_url,
-            }
             if auto_watch and self.orchestrator:
-                # Avoid circular import
                 await self.orchestrator.start_watch(
                     target_dir,
                     strategy=strategy,
                     interactive=interactive,
                     event_emitter=event_emitter,
                 )
-            config = self.load_config(target_dir, overrides=overrides)
 
-            exec_env_type = config.get("execution_env", "local")
+            config = self.load_config(
+                target_dir, overrides=kwargs
+            )  # Use kwargs for overrides
+            env_runner = self._create_execution_environment(config, target_dir)
 
-            if exec_env_type == "docker":
-                docker_conf = config.get("docker_config", {})
-                env_runner = DockerEnvironment(
-                    service_name=docker_conf.get("service_name", "app"),
-                    project_dir=target_dir,
-                )
-            elif exec_env_type == "k8s":
-                k8s_conf = config.get("k8s_config", {})
-                env_runner = K8sEnvironment(
-                    pod_name=k8s_conf.get("pod_name"),
-                    namespace=k8s_conf.get("namespace", "default"),
-                    container=k8s_conf.get("container", "aether-lens"),
-                )
-            else:
-                env_runner = LocalEnvironment()
+            # Unified Intro message
+            self._emit_log(
+                event_emitter,
+                PipelineFormatter.get_intro_panel(target_dir, config["strategy"]),
+            )
 
-            strategy = config.get("strategy", strategy)
-            browser_url = config.get("browser_url")
-            app_url = config.get("app_url", app_url)
+            if not await self._prepare_services(target_dir, config, event_emitter):
+                return
 
-            strategy_disp = f"{strategy} (Custom)" if strategy == "custom" else strategy
-            intro_msg = f"[bold blue]Aether Lens[/bold blue] Pipeline Triggered for [cyan]{target_dir}[/cyan] (Strategy: {strategy_disp})"
-            console.print(Panel(intro_msg, expand=False))
-            if event_emitter:
-                event_emitter.emit(
-                    PipelineLogEvent(
-                        type="log", timestamp=time.time(), message=intro_msg
-                    )
-                )
-
-            if not await self.ensure_services(
-                target_dir, config, event_emitter=event_emitter
-            ):
-                self._emit_error_log(
+            # Phase 2: Analysis & Selection
+            diff = "" if context == "cli" else await self.get_git_diff(target_dir)
+            if context != "cli" and not diff:
+                self._emit_log(
                     event_emitter,
-                    "Service Orchestration failed during PREPARATION phase.",
+                    PipelineFormatter.format_warning(
+                        "No changes detected. Skipping analysis."
+                    ),
                 )
                 return
 
-            deploy_conf = config.get("deployment", {}).get(
-                config.get("browser_strategy", "local")
-            )
-            if deploy_conf:
-                command = deploy_conf.get("command")
-                if command:
-                    success, msg = await self.run_deployment_hook(
-                        command, cwd=target_dir
-                    )
-                    if not success:
-                        if event_emitter:
-                            self._emit_error_log(
-                                event_emitter,
-                                f"Deployment Hook failed during PREPARATION phase: {msg}",
-                            )
-                        return
-
-                health_check = deploy_conf.get("health_check")
-                if health_check:
-                    if not await self.wait_for_health_check(
-                        health_check, event_emitter=event_emitter
-                    ):
-                        if event_emitter:
-                            self._emit_error_log(
-                                event_emitter,
-                                "Health check failed during PREPARATION phase.",
-                            )
-                        return
-
-            diff = ""
-            if context == "cli":
-                msg = " -> [Analysis] CLI context detected: Performing full test run (ignoring diff)."
-                console.print(msg)
-                if event_emitter:
-                    event_emitter.emit(
-                        PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
-                    )
-            else:
-                diff = await self.get_git_diff(target_dir)
-                if not diff:
-                    msg = "[yellow]No changes detected. Skipping analysis.[/yellow]"
-                    console.print(msg)
-                    if event_emitter:
-                        event_emitter.emit(
-                            PipelineLogEvent(
-                                type="log", timestamp=time.time(), message=msg
-                            )
-                        )
-                    return
-
-            # Phase 2: Analysis
             self._emit_phase_log(event_emitter, "ANALYSIS")
             analysis = self.planner.run_analysis(
-                diff, context, strategy, custom_instruction
+                diff, context, config["strategy"], custom_instruction
             )
             all_tests = analysis.get("recommended_tests", [])
 
             if not all_tests:
-                msg = "[yellow]No tests recommended for current changes.[/yellow]"
-                console.print(msg)
-                if event_emitter:
-                    event_emitter.emit(
-                        PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
-                    )
-                # Fallback test should also run local
-                all_tests = [
-                    {
-                        "type": "command",
-                        "label": "Visual Health Audit (Crawl)",
-                        "command": "python3 -m aether_lens.daemon.repository.runner site_audit",
-                        "execution_env": "local",
-                    }
-                ]
+                self._emit_log(
+                    event_emitter,
+                    PipelineFormatter.format_warning(
+                        "No tests recommended. Using fallback audit."
+                    ),
+                )
+                all_tests = [self._get_fallback_test()]
 
-            # Phase 3: Quality
-            quality_conf = config.get(
-                "quality_checks", {"enabled": True, "providers": ["ruff"]}
-            )
-            if quality_conf.get("enabled"):
-                self._emit_phase_log(event_emitter, "QUALITY GUARD")
-                quality_tests = []
-                for provider in quality_conf.get("providers", []):
-                    if provider == "ruff":
-                        quality_tests.append(
-                            {
-                                "type": "command",
-                                "label": "Quality Guard (Ruff)",
-                                "command": "ruff check . && ruff format --check .",
-                                "execution_env": "local",
-                            }
-                        )
-                    elif provider == "sonarqube":
-                        quality_tests.append(
-                            {
-                                "type": "command",
-                                "label": "Quality Guard (SonarQube)",
-                                "command": "npx -y sonarqube-scanner",
-                                "execution_env": "local",
-                            }
-                        )
-                all_tests = quality_tests + all_tests
+            # Phase 3: Quality Guard
+            all_tests = self._inject_quality_tests(config, all_tests, event_emitter)
 
             # Phase 4: Execution
             self._emit_phase_log(event_emitter, "EXECUTION")
             results = await self._execute_tests(
                 all_tests,
-                strategy,
+                config["strategy"],
                 target_dir,
                 event_emitter,
-                app_url,
+                config.get("app_url"),
                 interactive,
                 environment=env_runner,
             )
 
-            self.save_test_session(target_dir, results, strategy)
-
-            allure_strategy = config.get("allure_strategy", "none")
-            if allure_strategy != "none":
+            # Phase 5: Result Persistence & Reporting
+            self.save_test_session(target_dir, results, config["strategy"])
+            if config.get("allure_strategy") != "none":
                 report.export_to_allure(results, target_dir)
-
-            if self.cleanup_process and close_browser:
-                try:
-                    self.cleanup_process.terminate()
-                except Exception:
-                    pass
 
             return results
         finally:
-            # One-shot CLI run should cleanup all services started.
             if context == "cli":
                 self._emit_phase_log(event_emitter, "CLEANUP")
                 self.stop_dev_loop(target_dir)
+
+    async def _prepare_services(self, target_dir, config, event_emitter):
+        """Handle service orchestration and deployment hooks."""
+        if not await self.ensure_services(
+            target_dir, config, event_emitter=event_emitter
+        ):
+            self._emit_error_log(event_emitter, "Service Orchestration failed.")
+            return False
+
+        deploy_conf = config.get("deployment", {}).get(
+            config.get("execution_env", "local")
+        )
+        if deploy_conf:
+            cmd = deploy_conf.get("command")
+            if cmd:
+                success, msg = await self.run_deployment_hook(cmd, cwd=target_dir)
+                if not success:
+                    self._emit_error_log(
+                        event_emitter, f"Deployment Hook failed: {msg}"
+                    )
+                    return False
+
+            hc = deploy_conf.get("health_check")
+            if hc and not await self.wait_for_health_check(
+                hc, event_emitter=event_emitter
+            ):
+                self._emit_error_log(event_emitter, "Health check failed.")
+                return False
+        return True
+
+    def _inject_quality_tests(self, config, tests, event_emitter):
+        """Add quality guard tests (Ruff, SonarQube) if enabled."""
+        q_conf = config.get("quality_checks", {"enabled": True, "providers": ["ruff"]})
+        if not q_conf.get("enabled"):
+            return tests
+
+        self._emit_phase_log(event_emitter, "QUALITY GUARD")
+        q_tests = []
+        for provider in q_conf.get("providers", []):
+            if provider == "ruff":
+                q_tests.append(
+                    {
+                        "type": "command",
+                        "label": "Quality Guard (Ruff)",
+                        "command": "ruff check . && ruff format --check .",
+                        "execution_env": "local",
+                    }
+                )
+            elif provider == "sonarqube":
+                q_tests.append(
+                    {
+                        "type": "command",
+                        "label": "Quality Guard (SonarQube)",
+                        "command": "npx -y sonarqube-scanner",
+                        "execution_env": "local",
+                    }
+                )
+        return q_tests + tests
+
+    def _get_fallback_test(self):
+        return {
+            "type": "command",
+            "label": "Site Health Audit",
+            "command": "python3 -m aether_lens.daemon.repository.runner site_audit",
+            "execution_env": "local",
+        }
+
+    def _emit_log(self, event_emitter, message):
+        """Unified logging to both console and event emitter."""
+        if isinstance(message, str):
+            console.print(message)
+        else:
+            # Handle Rich objects (like Panels)
+            console.print(message)
+            # If it's a Panel, we might want to extract text for the emitter,
+            # but for now, we'll just skip detailed emission for complex objects
+            if not hasattr(message, "render"):
+                return
+
+        if event_emitter and isinstance(message, str):
+            event_emitter.emit(
+                PipelineLogEvent(type="log", timestamp=time.time(), message=message)
+            )
 
     async def _execute_tests(
         self,
@@ -629,7 +555,6 @@ class ExecutionController:
             executor = TestExecutor(
                 target_dir,
                 current_emitter,
-                test_runner=self.test_runner,
                 environment=environment,
             )
             tasks = [executor.execute_test(t, strategy, app_url) for t in tests]
@@ -673,19 +598,10 @@ class ExecutionController:
             message = getattr(event, "message", "")
             app.log_message(message)
 
-    def _emit_phase_log(self, event_emitter, phase_name: str):
-        separator = "=" * 20
-        msg = f"\n[bold yellow]{separator} PHASE: {phase_name} {separator}[/bold yellow]\n"
-        console.print(msg)
-        if event_emitter:
-            event_emitter.emit(
-                PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
-            )
+    def _emit_phase_log(self, event_emitter, phase: str):
+        msg = PipelineFormatter.format_phase(phase)
+        self._emit_log(event_emitter, msg)
 
     def _emit_error_log(self, event_emitter, message: str):
-        msg = f"[bold red]ERROR:[/bold red] {message}"
-        console.print(msg)
-        if event_emitter:
-            event_emitter.emit(
-                PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
-            )
+        msg = PipelineFormatter.format_error(message)
+        self._emit_log(event_emitter, msg)

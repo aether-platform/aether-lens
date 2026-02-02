@@ -33,7 +33,6 @@ class TestFinishedEvent(PipelineEvent):
     status: str  # PASSED, FAILED, SKIPPED
     error: Optional[str] = None
     artifact: Optional[str] = None
-    baseline: Optional[str] = None
 
 
 @dataclass

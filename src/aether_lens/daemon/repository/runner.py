@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-class VisualTestRunner:
+class SiteAuditor:
     def __init__(self, base_url: str = None, current_dir: str = None):
         self.base_url = base_url.rstrip("/") if base_url else ""
         self.current_dir = Path(current_dir or Path.cwd())
@@ -20,7 +20,7 @@ class VisualTestRunner:
 
     async def audit_site(self, parameters):
         """Use linkinator to discover URLs and lighthouse to audit them."""
-        print(f"Starting Visual Health Audit via External Tools on {self.base_url}...")
+        print(f"Starting Site Health Audit via External Tools on {self.base_url}...")
 
         # 1. Discover URLs via linkinator
         linkinator_cmd = [
@@ -102,8 +102,6 @@ class VisualTestRunner:
                 "--quiet",
             ]
 
-            # We don't save the full JSON to the repo to avoid bloat,
-            # but we could save it to an artifact dir if needed.
             rc, out, err = await self.run_external_tool(lh_cmd, "Lighthouse")
             if rc != 0:
                 print(f"FAILED: Lighthouse audit for {url}")
@@ -115,7 +113,6 @@ class VisualTestRunner:
                 scores = {k: v["score"] * 100 for k, v in report["categories"].items()}
                 print(f"PASSED: {url} | Scores: {scores}")
 
-                # Threshold check (optional)
                 threshold = float(parameters.get("min_score", 80))
                 for cat, score in scores.items():
                     if score < threshold:
@@ -139,11 +136,14 @@ class VisualTestRunner:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("suite_id")
-    parser.add_argument("--threshold", default=0.1)
-    parser.add_argument("--base-url", default="http://localhost:4321")
+    parser = argparse.ArgumentParser(description="Aether Lens Site Auditor")
+    parser.add_argument("suite_id", help="Suite to run (e.g., site_audit)")
+    parser.add_argument("--threshold", default=0.1, help="Test failure threshold")
+    parser.add_argument(
+        "--base-url", default="http://localhost:4321", help="Target base URL"
+    )
 
+    # Capture additional parameters as key=value or --key=value
     args, unknown = parser.parse_known_args()
 
     params = {"threshold": args.threshold}
@@ -161,5 +161,5 @@ if __name__ == "__main__":
         else:
             i += 1
 
-    runner = VisualTestRunner(base_url=args.base_url)
-    asyncio.run(runner.execute_suite(args.suite_id, params))
+    auditor = SiteAuditor(base_url=args.base_url)
+    asyncio.run(auditor.execute_suite(args.suite_id, params))
