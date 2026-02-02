@@ -67,6 +67,13 @@ class ExecutionController:
         self.lifecycle_registry = lifecycle_registry
         self.cleanup_process = None
 
+    def stop_dev_loop(self, target_dir: str) -> bool:
+        """Stop all background services for a target directory."""
+        if not self.lifecycle_registry:
+            return False
+        target_dir = str(Path(target_dir).resolve())
+        return self.lifecycle_registry.stop(target_dir)
+
     async def ensure_services(self, target_dir, config, event_emitter=None):
         """Start defined background services and wait for health checks."""
         services = config.get("services", [])
@@ -400,157 +407,190 @@ class ExecutionController:
     ):
         target_dir = str(Path(target_dir or ".").resolve())
 
-        # Phase 1: Preparation
-        self._emit_phase_log(event_emitter, "PREPARATION")
+        try:
+            # Phase 1: Preparation
+            self._emit_phase_log(event_emitter, "PREPARATION")
 
-        overrides = {
-            "browser_url": browser_url,
-            "strategy": strategy,
-            "app_url": app_url,
-        }
-        config = self.load_config(target_dir, overrides=overrides)
+            overrides = {
+                "browser_url": browser_url,
+                "strategy": strategy,
+                "app_url": app_url,
+            }
+            config = self.load_config(target_dir, overrides=overrides)
 
-        exec_env_type = config.get("execution_env", "local")
+            exec_env_type = config.get("execution_env", "local")
 
-        if exec_env_type == "docker":
-            docker_conf = config.get("docker_config", {})
-            env_runner = DockerEnvironment(
-                service_name=docker_conf.get("service_name", "app")
+            if exec_env_type == "docker":
+                docker_conf = config.get("docker_config", {})
+                env_runner = DockerEnvironment(
+                    service_name=docker_conf.get("service_name", "app"),
+                    project_dir=target_dir,
+                )
+            elif exec_env_type == "k8s":
+                k8s_conf = config.get("k8s_config", {})
+                env_runner = K8sEnvironment(
+                    pod_name=k8s_conf.get("pod_name"),
+                    namespace=k8s_conf.get("namespace", "default"),
+                    container=k8s_conf.get("container", "aether-lens"),
+                )
+            else:
+                env_runner = LocalEnvironment()
+
+            strategy = config.get("strategy", strategy)
+            browser_url = config.get("browser_url")
+            app_url = config.get("app_url", app_url)
+
+            strategy_disp = f"{strategy} (Custom)" if strategy == "custom" else strategy
+            intro_msg = f"[bold blue]Aether Lens[/bold blue] Pipeline Triggered for [cyan]{target_dir}[/cyan] (Strategy: {strategy_disp})"
+            console.print(Panel(intro_msg, expand=False))
+            if event_emitter:
+                event_emitter.emit(
+                    PipelineLogEvent(
+                        type="log", timestamp=time.time(), message=intro_msg
+                    )
+                )
+
+            if not await self.ensure_services(
+                target_dir, config, event_emitter=event_emitter
+            ):
+                self._emit_error_log(
+                    event_emitter,
+                    "Service Orchestration failed during PREPARATION phase.",
+                )
+                return
+
+            deploy_conf = config.get("deployment", {}).get(
+                config.get("browser_strategy", "local")
             )
-        elif exec_env_type == "k8s":
-            k8s_conf = config.get("k8s_config", {})
-            env_runner = K8sEnvironment(
-                pod_name=k8s_conf.get("pod_name"),
-                namespace=k8s_conf.get("namespace", "default"),
-                container=k8s_conf.get("container", "aether-lens"),
-            )
-        else:
-            env_runner = LocalEnvironment()
+            if deploy_conf:
+                command = deploy_conf.get("command")
+                if command:
+                    success, msg = await self.run_deployment_hook(
+                        command, cwd=target_dir
+                    )
+                    if not success:
+                        if event_emitter:
+                            self._emit_error_log(
+                                event_emitter,
+                                f"Deployment Hook failed during PREPARATION phase: {msg}",
+                            )
+                        return
 
-        strategy = config.get("strategy", strategy)
-        browser_url = config.get("browser_url")
-        app_url = config.get("app_url", app_url)
+                health_check = deploy_conf.get("health_check")
+                if health_check:
+                    if not await self.wait_for_health_check(
+                        health_check, event_emitter=event_emitter
+                    ):
+                        if event_emitter:
+                            self._emit_error_log(
+                                event_emitter,
+                                "Health check failed during PREPARATION phase.",
+                            )
+                        return
 
-        strategy_disp = f"{strategy} (Custom)" if strategy == "custom" else strategy
-        intro_msg = f"[bold blue]Aether Lens[/bold blue] Pipeline Triggered for [cyan]{target_dir}[/cyan] (Strategy: {strategy_disp})"
-        console.print(Panel(intro_msg, expand=False))
-        if event_emitter:
-            event_emitter.emit(
-                PipelineLogEvent(type="log", timestamp=time.time(), message=intro_msg)
-            )
-
-        if not await self.ensure_services(
-            target_dir, config, event_emitter=event_emitter
-        ):
-            self._emit_error_log(
-                event_emitter, "Service Orchestration failed during PREPARATION phase."
-            )
-            return
-
-        deploy_conf = config.get("deployment", {}).get(
-            config.get("browser_strategy", "local")
-        )
-        if deploy_conf:
-            command = deploy_conf.get("command")
-            if command:
-                success, msg = await self.run_deployment_hook(command, cwd=target_dir)
-                if not success:
+            diff = ""
+            if context == "cli":
+                msg = " -> [Analysis] CLI context detected: Performing full test run (ignoring diff)."
+                console.print(msg)
+                if event_emitter:
+                    event_emitter.emit(
+                        PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
+                    )
+            else:
+                diff = await self.get_git_diff(target_dir)
+                if not diff:
+                    msg = "[yellow]No changes detected. Skipping analysis.[/yellow]"
+                    console.print(msg)
                     if event_emitter:
-                        self._emit_error_log(
-                            event_emitter,
-                            f"Deployment Hook failed during PREPARATION phase: {msg}",
+                        event_emitter.emit(
+                            PipelineLogEvent(
+                                type="log", timestamp=time.time(), message=msg
+                            )
                         )
                     return
 
-            health_check = deploy_conf.get("health_check")
-            if health_check:
-                if not await self.wait_for_health_check(
-                    health_check, event_emitter=event_emitter
-                ):
-                    if event_emitter:
-                        self._emit_error_log(
-                            event_emitter,
-                            "Health check failed during PREPARATION phase.",
+            # Phase 2: Analysis
+            self._emit_phase_log(event_emitter, "ANALYSIS")
+            analysis = self.planner.run_analysis(
+                diff, context, strategy, custom_instruction
+            )
+            all_tests = analysis.get("recommended_tests", [])
+
+            if not all_tests:
+                msg = "[yellow]No tests recommended for current changes.[/yellow]"
+                console.print(msg)
+                if event_emitter:
+                    event_emitter.emit(
+                        PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
+                    )
+                # Fallback test should also run local
+                all_tests = [
+                    {
+                        "type": "command",
+                        "label": "Home Layout Check (Fallback)",
+                        "command": "python3 -m aether_lens.core.runner layout_check",
+                        "execution_env": "local",
+                    }
+                ]
+
+            # Phase 3: Quality
+            quality_conf = config.get(
+                "quality_checks", {"enabled": True, "providers": ["ruff"]}
+            )
+            if quality_conf.get("enabled"):
+                self._emit_phase_log(event_emitter, "QUALITY GUARD")
+                quality_tests = []
+                for provider in quality_conf.get("providers", []):
+                    if provider == "ruff":
+                        quality_tests.append(
+                            {
+                                "type": "command",
+                                "label": "Quality Guard (Ruff)",
+                                "command": "ruff check . && ruff format --check .",
+                                "execution_env": "local",
+                            }
                         )
-                    return
+                    elif provider == "sonarqube":
+                        quality_tests.append(
+                            {
+                                "type": "command",
+                                "label": "Quality Guard (SonarQube)",
+                                "command": "sonar-scanner",
+                                "execution_env": "local",
+                            }
+                        )
+                all_tests = quality_tests + all_tests
 
-        diff = await self.get_git_diff(target_dir)
-        if not diff:
-            msg = "[yellow]No changes detected. Skipping analysis.[/yellow]"
-            console.print(msg)
-            if event_emitter:
-                event_emitter.emit(
-                    PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
-                )
-            return
+            # Phase 4: Execution
+            self._emit_phase_log(event_emitter, "EXECUTION")
+            results = await self._execute_tests(
+                all_tests,
+                strategy,
+                target_dir,
+                event_emitter,
+                app_url,
+                use_tui,
+                environment=env_runner,
+            )
 
-        # Phase 2: Analysis
-        self._emit_phase_log(event_emitter, "ANALYSIS")
-        analysis = self.planner.run_analysis(
-            diff, context, strategy, custom_instruction
-        )
-        all_tests = analysis.get("recommended_tests", [])
+            self.save_test_session(target_dir, results, strategy)
 
-        if not all_tests:
-            msg = "[yellow]No tests recommended for current changes.[/yellow]"
-            console.print(msg)
-            if event_emitter:
-                event_emitter.emit(
-                    PipelineLogEvent(type="log", timestamp=time.time(), message=msg)
-                )
-            return
+            allure_strategy = config.get("allure_strategy", "none")
+            if allure_strategy != "none":
+                report.export_to_allure(results, target_dir)
 
-        # Phase 3: Quality
-        quality_conf = config.get(
-            "quality_checks", {"enabled": True, "providers": ["ruff"]}
-        )
-        if quality_conf.get("enabled"):
-            self._emit_phase_log(event_emitter, "QUALITY GUARD")
-            quality_tests = []
-            for provider in quality_conf.get("providers", []):
-                if provider == "ruff":
-                    quality_tests.append(
-                        {
-                            "type": "command",
-                            "label": "Quality Guard (Ruff)",
-                            "command": "ruff check . && ruff format --check .",
-                        }
-                    )
-                elif provider == "sonarqube":
-                    quality_tests.append(
-                        {
-                            "type": "command",
-                            "label": "Quality Guard (SonarQube)",
-                            "command": "sonar-scanner",
-                        }
-                    )
-            all_tests = quality_tests + all_tests
+            if self.cleanup_process and close_browser:
+                try:
+                    self.cleanup_process.terminate()
+                except Exception:
+                    pass
 
-        # Phase 4: Execution
-        self._emit_phase_log(event_emitter, "EXECUTION")
-        results = await self._execute_tests(
-            all_tests,
-            strategy,
-            target_dir,
-            event_emitter,
-            app_url,
-            use_tui,
-            environment=env_runner,
-        )
-
-        self.save_test_session(target_dir, results, strategy)
-
-        allure_strategy = config.get("allure_strategy", "none")
-        if allure_strategy != "none":
-            report.export_to_allure(results, target_dir)
-
-        if self.cleanup_process and close_browser:
-            try:
-                self.cleanup_process.terminate()
-            except Exception:
-                pass
-
-        return results
+            return results
+        finally:
+            # One-shot CLI run should cleanup all services started.
+            if context == "cli":
+                self._emit_phase_log(event_emitter, "CLEANUP")
+                self.stop_dev_loop(target_dir)
 
     async def _execute_tests(
         self,

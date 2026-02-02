@@ -1,6 +1,8 @@
 import time
 
 from playwright.async_api import async_playwright
+from rich.markup import escape
+from rich.text import Text
 
 from aether_lens.core.domain.models import (
     PipelineLogEvent,
@@ -37,7 +39,13 @@ class TestExecutor:
                 )
             )
 
-        success, error, artifact = False, None, None
+        success, output, artifact = False, None, None
+        env = self.environment
+        if test.get("execution_env") == "local" and not isinstance(
+            env, LocalEnvironment
+        ):
+            env = LocalEnvironment()
+
         if test_type == "command":
             if self.event_emitter:
                 self.event_emitter.emit(
@@ -47,7 +55,10 @@ class TestExecutor:
                         message=f" -> [dim]Executing command:[/dim] {path_or_cmd}",
                     )
                 )
-            success, error, artifact = await self._run_command(path_or_cmd, label)
+            # Use the resolved environment (potentially overridden to local)
+            success, output, artifact = await env.run_command(
+                path_or_cmd, cwd=self.target_dir
+            )
         elif test_type == "visual":
             if self.event_emitter:
                 self.event_emitter.emit(
@@ -64,18 +75,41 @@ class TestExecutor:
                 async with async_playwright() as p:
                     browser = await p.chromium.launch()
                     page = await browser.new_page()
-                    success, error, artifact = await runner.run_visual_test(
+                    success, output, artifact = await runner.run_visual_test(
                         page, label=label, path_url=path_or_cmd, test_id_key=label
                     )
                     await browser.close()
             except Exception as e:
-                success, error = False, f"Visual Test Error: {e}"
+                success, output = False, f"Visual Test Error: {e}"
 
         status = "PASSED" if success else "FAILED"
+        status_color = "bold green" if success else "bold red"
+
         if self.event_emitter:
-            log_message = f" -> Test '{label}' {status}"
-            if error:
-                log_message += f": [red]{error}[/red]"
+            log_message = (
+                f" -> Test '{label}' [{status_color}]{status}[/{status_color}]"
+            )
+            if output:
+                # Convert output to Rich markup with ANSI support or escaping
+                try:
+                    # If it's a string, try parsing ANSI codes
+                    if isinstance(output, str):
+                        rich_text = Text.from_ansi(output)
+                        # If there were ANSI codes, use markup. If not, escape to be safe.
+                        if "\x1b[" in output:
+                            formatted_output = rich_text.markup
+                        else:
+                            formatted_output = escape(output)
+                    else:
+                        formatted_output = escape(str(output))
+
+                    output_color = "dim" if success else "red"
+                    log_message += (
+                        f": [{output_color}]{formatted_output}[/{output_color}]"
+                    )
+                except Exception:
+                    # Fallback to simple escaping if anything goes wrong
+                    log_message += f": [dim]{escape(str(output))}[/dim]"
 
             self.event_emitter.emit(
                 PipelineLogEvent(type="log", timestamp=time.time(), message=log_message)
@@ -87,7 +121,7 @@ class TestExecutor:
                     timestamp=time.time(),
                     label=label,
                     status=status,
-                    error=error,
+                    error=None if success else output,
                     artifact=artifact,
                 )
             )
@@ -96,30 +130,7 @@ class TestExecutor:
             "type": test_type,
             "label": label,
             "status": status,
-            "error": error,
+            "error": None if success else output,
             "artifact": artifact,
             "strategy": strategy,
         }
-
-    async def _run_command(self, command, label="unknown"):
-        success, error, artifact = await self.environment.run_command(
-            command, cwd=self.target_dir
-        )
-
-        # Specialized error handling for common tools
-        if not success and error:
-            error_lower = error.lower()
-            if "not found" in error_lower or "no such file" in error_lower:
-                if "ruff" in command:
-                    error = "Ruff not found. Please install it with 'pip install ruff'."
-                elif "sonar-scanner" in command:
-                    error = "sonar-scanner not found. Please ensure it is installed and in your PATH."
-                elif "docker-compose" in command or "docker compose" in command:
-                    error = (
-                        "Docker Compose not found. Please ensure Docker is installed and "
-                        "'docker compose' (V2) or 'docker-compose' is available in your PATH."
-                    )
-                elif "kubectl" in command:
-                    error = "kubectl not found. Please ensure Kubernetes CLI is installed and in your PATH."
-
-        return success, error, artifact

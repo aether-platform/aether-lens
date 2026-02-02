@@ -7,7 +7,7 @@ try:
     from textual.containers import Container, Horizontal, Vertical
     from textual.message import Message
     from textual.screen import ModalScreen
-    from textual.widgets import Button, DataTable, Footer, Header, Label, Log
+    from textual.widgets import Button, DataTable, Footer, Header, Label, RichLog
 except ImportError:
     # Allow import for type checking, but runtime will fail if used
     App = object
@@ -16,7 +16,7 @@ except ImportError:
     Container = Horizontal = Vertical = None
     Message = object
     ModalScreen = object
-    Button = DataTable = Footer = Header = Label = Log = None
+    Button = DataTable = Footer = Header = Label = RichLog = None
 
 
 class BrowserConfirmModal(ModalScreen):
@@ -122,7 +122,7 @@ class PipelineDashboard(App):
                     id="phase-status",
                 )
                 yield Label("[bold]Execution Logs[/bold]")
-                yield Log(id="execution-log")
+                yield RichLog(id="execution-log", markup=True)
         yield Label(
             " [bold blue]Dashboard:[/bold blue] [underline]http://localhost:5050/allure-docker-service/projects/default/reports/latest/index.html[/underline]\n"
             " [dim]Note: TUI shows latest history (auto-scroll). Refer to Allure for full persistent logs.[/dim]",
@@ -163,23 +163,23 @@ class PipelineDashboard(App):
         self.current_filter_label = label
 
         # Refresh Log Widget
-        log_widget = self.query_one("#execution-log", Log)
+        log_widget = self.query_one("#execution-log", RichLog)
         log_widget.clear()
 
         if label:
-            log_widget.write_line(
+            log_widget.write(
                 f"[bold cyan]--- Filtering logs for: {label} ---[/bold cyan]"
             )
             for log_label, msg in self.log_buffer:
                 if log_label == label or log_label is None:
                     # 'None' means global log, always show or maybe optional?
                     # Let's show global logs + selected test logs
-                    log_widget.write_line(msg)
+                    log_widget.write(msg)
         else:
             # Show all
-            log_widget.write_line("[bold cyan]--- Showing all logs ---[/bold cyan]")
+            log_widget.write("[bold cyan]--- Showing all logs ---[/bold cyan]")
             for _, msg in self.log_buffer:
-                log_widget.write_line(msg)
+                log_widget.write(msg)
 
     async def ask_browser_confirmation(
         self, question: str, default: bool = True
@@ -339,7 +339,7 @@ class PipelineDashboard(App):
             self.log_buffer.pop(0)
 
         try:
-            log_widget = self.query_one("#execution-log", Log)
+            log_widget = self.query_one("#execution-log", RichLog)
             log_widget.max_lines = 500
 
             # Write to widget ONLY if matches filter
@@ -350,18 +350,18 @@ class PipelineDashboard(App):
                 should_write = True
 
             if should_write:
-                log_widget.write_line(message)
+                log_widget.write(message)
         except Exception:
             pass  # Fallback or ignore if TUI isn't ready
 
     def show_completion_message(self):
         """Show clear completion instruction."""
         try:
-            log_widget = self.query_one("#execution-log", Log)
-            log_widget.write_line("")
-            log_widget.write_line("=" * 40)
-            log_widget.write_line("Pipeline Execution Completed.")
-            log_widget.write_line("Press 'q' to exit.")
-            log_widget.write_line("=" * 40)
+            log_widget = self.query_one("#execution-log", RichLog)
+            log_widget.write("")
+            log_widget.write("=" * 40)
+            log_widget.write("Pipeline Execution Completed.")
+            log_widget.write("Press 'q' to exit.")
+            log_widget.write("=" * 40)
         except Exception:
             pass

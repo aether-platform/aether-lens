@@ -1,5 +1,6 @@
 import asyncio
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Tuple
 
 try:
@@ -35,9 +36,15 @@ class LocalEnvironment(RuntimeEnvironment):
 
 
 class DockerEnvironment(RuntimeEnvironment):
-    def __init__(self, service_name: str, compose_file: str = "docker-compose.yml"):
+    def __init__(
+        self,
+        service_name: str,
+        project_dir: str = ".",
+        remote_root: str = "/app",
+    ):
         self.service_name = service_name
-        self.compose_file = compose_file
+        self.project_dir = Path(project_dir).resolve()
+        self.remote_root = Path(remote_root)
         self._client = None
 
     def _get_client(self):
@@ -46,7 +53,8 @@ class DockerEnvironment(RuntimeEnvironment):
                 raise ImportError(
                     "The 'python-on-whales' library is required for DockerEnvironment."
                 )
-            self._client = DockerClient()
+            # Initialize with the project directory for compose context
+            self._client = DockerClient(compose_project_directory=self.project_dir)
         return self._client
 
     async def run_command(self, command: str, cwd: str = None) -> Tuple[bool, str, Any]:
@@ -54,12 +62,23 @@ class DockerEnvironment(RuntimeEnvironment):
         try:
             client = self._get_client()
 
-            # Using SDK for execution
+            # Path Mapping: Convert host absolute path to container relative path
+            workdir = str(self.remote_root)
+            if cwd:
+                cwd_path = Path(cwd).resolve()
+                try:
+                    relative_cwd = cwd_path.relative_to(self.project_dir)
+                    workdir = str(self.remote_root / relative_cwd)
+                except ValueError:
+                    # If not relative to project_dir, we fallback to remote_root
+                    pass
+
+            # Using SDK for execution via COMPOSE (which uses service names)
             output = await asyncio.to_thread(
-                client.execute,
-                container=self.service_name,
+                client.compose.execute,
+                service=self.service_name,
                 command=["sh", "-c", command],
-                workdir=cwd,
+                workdir=workdir,
             )
 
             return True, output, None

@@ -62,6 +62,7 @@ class TestPlanner:
                     "type": "command",
                     "label": "Home Layout Check (Fallback)",
                     "command": "python3 -m aether_lens.core.runner layout_check",
+                    "execution_env": "local",
                 }
             )
 
