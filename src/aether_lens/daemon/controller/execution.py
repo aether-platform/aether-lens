@@ -527,7 +527,7 @@ class ExecutionController:
                 all_tests = [
                     {
                         "type": "command",
-                        "label": "Home Layout Check (Fallback)",
+                        "label": "Home Layout Check (Standard)",
                         "command": "python3 -m aether_lens.core.runner layout_check",
                         "execution_env": "local",
                     }
