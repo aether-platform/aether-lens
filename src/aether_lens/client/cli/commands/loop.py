@@ -1,11 +1,8 @@
-import os
-
 import click
 from dependency_injector.wiring import Provide, inject
 from rich.console import Console
 
 from aether_lens.core.containers import Container
-from aether_lens.daemon.loop_daemon import run_loop_daemon
 
 console = Console(stderr=True)
 
@@ -30,32 +27,36 @@ def loop(
     remote_path,
     browser_strategy,
     browser_url,
-    loop_daemon=Provide[
+    execution_service: Container.execution_service = Provide[
         Container.execution_service
-    ],  # Correcting this later to actual handler if needed
+    ],
 ):
     """Start a heavy development loop (Sync & Remote Test)."""
-    # Using injected loop_daemon (test_runner in container terms actually)
-
-    # Resolve default URL if not provided
-    if not browser_url:
-        if browser_strategy == "docker":
-            browser_url = "ws://localhost:9222"
-        elif browser_strategy == "inpod":
-            browser_url = os.getenv("TEST_RUNNER_URL", "ws://aether-lens-sidecar:9222")
-
-    # browser_strategy, browser_url are just variables here
 
     if not pod_name:
         console.print("[red]Error: Pod name is required for loop command.[/red]")
         return
 
-    run_loop_daemon(
-        target_dir=target_dir,
-        pod_name=pod_name,
-        namespace=namespace,
-        remote_path=remote_path,
-        blocking=True,
-        browser_strategy=browser_strategy,
-        browser_url=browser_url,
+    # Use controller to start the loop
+    import asyncio
+
+    asyncio.run(
+        execution_service.start_loop(
+            target_dir=target_dir,
+            pod_name=pod_name,
+            namespace=namespace,
+            remote_path=remote_path,
+            browser_strategy=browser_strategy,
+            browser_url=browser_url,
+        )
     )
+
+    # Since start_loop with blocking=False returns, but CLI usually wants to block
+    # We might need to keep it running here if we want the CLI to stay active.
+    import time
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        execution_service.stop_dev_loop(target_dir)

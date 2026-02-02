@@ -1,0 +1,40 @@
+# Build stage
+FROM python:3.11-slim as builder
+
+WORKDIR /app
+
+# Install uv for fast dependency management
+RUN pip install uv
+
+# Copy only dependency files first to leverage Docker cache
+COPY pyproject.toml ./
+RUN uv pip install --system .
+
+# Copy the rest of the source code
+COPY . .
+
+# --- Code Quality Check Stage ---
+# Docker Build 時に lint と format をチェック
+# これにより、不備がある場合はビルドが失敗し、品質が担保される
+RUN uv pip install --system ruff
+RUN ruff check .
+RUN ruff format --check .
+
+# --- Final Production Stage ---
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy only the installed packages from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+COPY . .
+
+# Required for Playwright (if browser dependencies are needed)
+# RUN playwright install-deps && playwright install chromium
+
+EXPOSE 8000
+
+ENTRYPOINT ["aether-lens"]
+CMD ["run", "."]
+ Riverside

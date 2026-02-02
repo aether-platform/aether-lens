@@ -1,14 +1,25 @@
-import asyncio
 import time
 
-from aether_lens.core.domain.models import TestFinishedEvent, TestStartedEvent
+from playwright.async_api import async_playwright
+
+from aether_lens.core.domain.models import (
+    PipelineLogEvent,
+    TestFinishedEvent,
+    TestStartedEvent,
+)
+from aether_lens.daemon.repository.environments import LocalEnvironment
+
+from .runner import VisualTestRunner
 
 
 class TestExecutor:
-    def __init__(self, target_dir, event_emitter=None, test_runner=None):
+    def __init__(
+        self, target_dir, event_emitter=None, test_runner=None, environment=None
+    ):
         self.target_dir = target_dir
         self.event_emitter = event_emitter
         self.test_runner = test_runner
+        self.environment = environment or LocalEnvironment()
 
     async def execute_test(self, test, strategy, app_url):
         test_type = test.get("type", "command")
@@ -28,12 +39,24 @@ class TestExecutor:
 
         success, error, artifact = False, None, None
         if test_type == "command":
+            if self.event_emitter:
+                self.event_emitter.emit(
+                    PipelineLogEvent(
+                        type="log",
+                        timestamp=time.time(),
+                        message=f" -> [dim]Executing command:[/dim] {path_or_cmd}",
+                    )
+                )
             success, error, artifact = await self._run_command(path_or_cmd, label)
         elif test_type == "visual":
-            from playwright.async_api import async_playwright
-
-            from .runner import VisualTestRunner
-
+            if self.event_emitter:
+                self.event_emitter.emit(
+                    PipelineLogEvent(
+                        type="log",
+                        timestamp=time.time(),
+                        message=f" -> [dim]Starting Playwright for:[/dim] {label}",
+                    )
+                )
             runner = self.test_runner or VisualTestRunner(
                 base_url=app_url, current_dir=self.target_dir
             )
@@ -50,6 +73,14 @@ class TestExecutor:
 
         status = "PASSED" if success else "FAILED"
         if self.event_emitter:
+            log_message = f" -> Test '{label}' {status}"
+            if error:
+                log_message += f": [red]{error}[/red]"
+
+            self.event_emitter.emit(
+                PipelineLogEvent(type="log", timestamp=time.time(), message=log_message)
+            )
+
             self.event_emitter.emit(
                 TestFinishedEvent(
                     type="test_finished",
@@ -70,19 +101,17 @@ class TestExecutor:
             "strategy": strategy,
         }
 
-    async def _run_command(self, command, label):
-        try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=self.target_dir,
-            )
-            stdout, stderr = await proc.communicate()
-            return (
-                proc.returncode == 0,
-                stdout.decode().strip() + "\n" + stderr.decode().strip(),
-                None,
-            )
-        except Exception as e:
-            return False, str(e), None
+    async def _run_command(self, command, label="unknown"):
+        success, error, artifact = await self.environment.run_command(
+            command, cwd=self.target_dir
+        )
+
+        # Specialized error handling for common quality tools
+        if not success and error:
+            if "not found" in error.lower() or "no such file" in error.lower():
+                if "ruff" in command:
+                    error = "Ruff not found. Please install it with 'pip install ruff'."
+                elif "sonar-scanner" in command:
+                    error = "sonar-scanner not found. Please ensure it is installed and in your PATH."
+
+        return success, error, artifact

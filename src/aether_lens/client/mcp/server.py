@@ -7,8 +7,6 @@ from fastmcp import FastMCP
 
 from aether_lens.core.containers import Container
 from aether_lens.core.planning.ai import run_analysis
-from aether_lens.daemon.loop_daemon import run_loop_daemon
-from aether_lens.daemon.registry import stop_loop
 
 logfire.configure(send_to_logfire="if-token-present")
 logfire.instrument_pydantic()
@@ -118,31 +116,25 @@ async def run_pipeline(
 
 
 @mcp.tool()
-def start_lens_loop(
+@inject
+async def start_lens_loop(
     target_dir: str,
     pod_name: str,
     namespace: str = "aether-system",
     remote_path: str = "/app/project",
     browser_strategy: str = "inpod",
     browser_url: str = None,
+    execution_service=Provide[Container.execution_service],
 ):
     """
     Start the local Lens Loop daemon for a directory (Non-blocking).
     This will watch for local changes in the background.
-
-    :param target_dir: Local directory to watch.
-    :param pod_name: Target Kubernetes Pod name.
-    :param namespace: Kubernetes namespace.
-    :param remote_path: Path inside the container to sync files to.
-    :param browser_strategy: local, docker, or inpod.
-    :param browser_url: Optional CDP URL for docker/inpod.
     """
-    run_loop_daemon(
-        target_dir,
-        pod_name,
-        namespace,
-        remote_path,
-        blocking=False,
+    await execution_service.start_loop(
+        target_dir=target_dir,
+        pod_name=pod_name,
+        namespace=namespace,
+        remote_path=remote_path,
         browser_strategy=browser_strategy,
         browser_url=browser_url,
     )
@@ -150,14 +142,14 @@ def start_lens_loop(
 
 
 @mcp.tool()
-def stop_lens_loop(target_dir: str):
+@inject
+def stop_lens_loop(
+    target_dir: str, execution_service=Provide[Container.execution_service]
+):
     """
     Stop the active Lens Loop daemon for a directory.
-
-    :param target_dir: Local directory being watched.
     """
-
-    if stop_loop(target_dir):
+    if execution_service.stop_dev_loop(target_dir):
         return f"Lens Loop stopped for {target_dir}."
     else:
         return f"No active Lens Loop found for {target_dir}."

@@ -3,7 +3,6 @@ from dependency_injector.wiring import Provide, inject
 from rich.console import Console
 
 from aether_lens.core.containers import Container
-from aether_lens.daemon.registry import stop_loop
 
 console = Console(stderr=True)
 
@@ -11,10 +10,15 @@ console = Console(stderr=True)
 @click.command()
 @click.argument("target_dir", default=".")
 @inject
-def stop(target_dir, registry_stop=Provide[Container.watch_service]):  # Simplified
+def stop(
+    target_dir,
+    execution_service: Container.execution_service = Provide[
+        Container.execution_service
+    ],
+):
     """Stop an active Aether Lens loop."""
 
-    if stop_loop(target_dir):
+    if execution_service.stop_dev_loop(target_dir):
         click.echo(f"Lens loop stopped for {target_dir}")
     else:
         click.echo(f"No active loop found for {target_dir}")

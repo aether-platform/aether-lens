@@ -6,8 +6,6 @@ from rich.console import Console
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from .execution import ExecutionController
-
 console = Console(stderr=True)
 
 
@@ -18,12 +16,12 @@ class WatchController(FileSystemEventHandler):
     """
 
     def __init__(
-        self, target_dir, on_change_callback, debounce_seconds=2, execution_ctrl=None
+        self, target_dir, on_change_callback, debounce_seconds=2, orchestrator=None
     ):
         self.target_dir = target_dir
         self.on_change_callback = on_change_callback
         self.debounce_seconds = debounce_seconds
-        self.execution_ctrl = execution_ctrl
+        self.orchestrator = orchestrator
         self.last_triggered = 0
         self.observer = None
         self.cleanup_data = None  # {"cmd": str, "proc": Popen}
@@ -71,10 +69,8 @@ class WatchController(FileSystemEventHandler):
 
     async def setup_deployment(self, target_dir, browser_strategy, config):
         """Logic for setting up the test environment (compose, kubectl, etc.)"""
-        exec_ctrl = self.execution_ctrl
-        if not exec_ctrl:
-            exec_ctrl = ExecutionController(config={})  # Fallback
-
+        if not self.orchestrator:
+            return None  # Or handle as no-op
         deployment_config = config.get("deployment", {})
         current_env = browser_strategy.replace("-", "_")
         env_deploy = deployment_config.get(current_env)
@@ -98,18 +94,20 @@ class WatchController(FileSystemEventHandler):
 
         if deploy_cmd:
             if env_deploy and env_deploy.get("background"):
-                proc = exec_ctrl.start_background_process(
+                proc = self.orchestrator.start_background_process(
                     deploy_cmd, cwd=target_dir
-                )  # Need to ensure this exists or is moved
+                )
                 self.cleanup_data = {"cmd": cleanup_cmd, "proc": proc}
             else:
-                success, _ = exec_ctrl.run_deployment_hook(deploy_cmd, cwd=target_dir)
+                success, _ = self.orchestrator.run_deployment_hook(
+                    deploy_cmd, cwd=target_dir
+                )
                 if not success:
                     raise RuntimeError("Deployment hook failed.")
                 self.cleanup_data = {"cmd": cleanup_cmd, "proc": None}
 
             if health_check_url:
-                if not await exec_ctrl.wait_for_health_check(health_check_url):
+                if not await self.orchestrator.wait_for_health_check(health_check_url):
                     raise RuntimeError(f"Health check failed for {health_check_url}")
 
         return self.cleanup_data
@@ -131,14 +129,12 @@ class WatchController(FileSystemEventHandler):
                 proc.terminate()
 
         if cleanup_cmd:
-            exec_ctrl = self.execution_ctrl
-            if not exec_ctrl:
-                exec_ctrl = ExecutionController(config={})
-            exec_ctrl.run_deployment_hook(cleanup_cmd, cwd=target_dir)
+            if self.orchestrator:
+                self.orchestrator.run_deployment_hook(cleanup_cmd, cwd=target_dir)
 
         self.cleanup_data = None
 
 
-def start_watcher(target_dir, callback, blocking=True):
-    ctrl = WatchController(target_dir, callback)
+def start_watcher(target_dir, callback, blocking=True, orchestrator=None):
+    ctrl = WatchController(target_dir, callback, orchestrator=orchestrator)
     return ctrl.start(blocking=blocking)

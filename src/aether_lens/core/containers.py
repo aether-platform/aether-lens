@@ -54,7 +54,29 @@ class Container(containers.DeclarativeContainer):
 
         return ReportService()
 
+    @staticmethod
+    def _create_lifecycle_registry():
+        from aether_lens.daemon.repository.lifecycle import LifecycleRegistry
+
+        return LifecycleRegistry()
+
+    @staticmethod
+    def _create_loop_handler(
+        target_dir=None, pod_name=None, namespace=None, remote_path=None, **kwargs
+    ):
+        from aether_lens.daemon.repository.session import LocalLensLoopHandler
+
+        return LocalLensLoopHandler(
+            target_dir=target_dir,
+            pod_name=pod_name,
+            namespace=namespace,
+            remote_path=remote_path,
+        )
+
     # Services (Using Factory to avoid circular imports during class definition)
+
+    lifecycle_registry = providers.Singleton(_create_lifecycle_registry)
+    loop_handler = providers.Factory(_create_loop_handler)
 
     check_service = providers.Factory(_create_check_service)
 
@@ -66,6 +88,7 @@ class Container(containers.DeclarativeContainer):
         config=config.provider,
         test_runner=test_runner,
         planner=test_planner,
+        lifecycle_registry=lifecycle_registry,
     )
     watch_service = providers.Factory(
         _create_watch_controller, execution_ctrl=execution_service
