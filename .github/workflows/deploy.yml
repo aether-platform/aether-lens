@@ -24,10 +24,12 @@ jobs:
           node-version: "20"
 
       - name: Install Dependencies
+        if: hashFiles('docs/package-lock.json') != ''
         run: npm ci
         working-directory: ./docs
 
       - name: Build
+        if: hashFiles('docs/package-lock.json') != ''
         run: npm run build
         working-directory: ./docs
 
